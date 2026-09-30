@@ -23,6 +23,25 @@ docs/ 업무 문서 ──(1) ingest: Claude가 문서 분석──▶ data/task
    - 🔜 마감은 나중이지만 지금 준비를 시작해야 하는 업무
    - ⚠️ 최근 2주 안에 마감이 지났는데 완료 처리되지 않은 업무
 
+## 웹 대시보드
+
+```bash
+people-alarm serve                  # http://127.0.0.1:8000 에서 열기
+people-alarm export-html            # reports/dashboard.html 파일 하나로 저장 (읽기 전용 스냅샷)
+```
+
+- **기간 타일**: 오늘 / 이번 주 / 이번 달 / 다음 달의 남은 업무 수. 누르면 아래 리스트가 바뀝니다.
+- **업무 리스트**: 지난 마감(미완료) · 기간 내 마감 · 지금 준비할 업무. 체크박스로 완료 처리하면 `data/done.json`에 저장됩니다.
+- **달력**: 한국 탁상달력처럼 일요일·공휴일은 빨강, 토요일은 파랑. 날짜를 누르면 그날 업무가 보입니다.
+- **월별 마감 업무 수**: 앞으로 12개월 중 바쁜 달을 한눈에. 막대를 누르면 달력이 그 달로 이동합니다.
+- **전체 업무**: 반복 규칙, 준비 기간, 다음 마감일, 출처 문서를 검색할 수 있는 표.
+- 분류 칩으로 급여·세무 등 원하는 분류만 볼 수 있고, 기준일을 바꿔 과거·미래 시점도 볼 수 있습니다.
+
+`serve`는 기본적으로 이 PC(127.0.0.1)에서만 접속됩니다. `export-html`로 만든 파일은 서버 없이 열리며,
+완료 표시는 그 브라우저에만 저장됩니다.
+
+샘플 데이터로 체험: `python -m people_alarm --data examples/data serve --fixed-date 2026-09-30`
+
 ## 설치
 
 ```bash
@@ -91,6 +110,9 @@ people_alarm/
   schedule.py   반복 규칙 → 실제 날짜 계산 (한국 공휴일 반영)
   store.py      data/tasks.json, data/done.json 저장소
   report.py     기간별 리스트 계산 + 마크다운 렌더링
+  dashboard.py  대시보드 데이터(payload) + HTML 생성
+  server.py     로컬 웹 서버 (serve)
+  web/dashboard.html  대시보드 화면
   cli.py        명령줄 인터페이스
 tests/          pytest 테스트
 ```

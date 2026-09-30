@@ -4,6 +4,8 @@
   people-alarm today|week|month|next-month [--date YYYY-MM-DD] [--save]
   people-alarm list              # 추출된 전체 업무
   people-alarm done <id> [--due YYYY-MM-DD]
+  people-alarm serve [--port 8000]   # 웹 대시보드
+  people-alarm export-html           # 대시보드를 HTML 파일 하나로 저장
 """
 
 from __future__ import annotations
@@ -95,6 +97,23 @@ def cmd_done(args, store: Store) -> int:
     return 0
 
 
+def cmd_serve(args, store: Store) -> int:
+    from .server import serve
+
+    serve(args.data, args.host, args.port, default_date=args.fixed_date)
+    return 0
+
+
+def cmd_export_html(args, store: Store) -> int:
+    from .dashboard import build_payload, render_page
+
+    payload = build_payload(store, args.date, mode="static", label=args.label)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(render_page(payload), encoding="utf-8")
+    print(f"저장됨: {args.out}  (브라우저로 열면 됩니다)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="people-alarm", description="업무 문서 기반 시기별 업무 알림 agent")
     p.add_argument("--data", type=Path, default=Path("data"), help="업무 저장 폴더 (기본: data)")
@@ -115,6 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("done", help="업무 완료 처리")
     d.add_argument("task_id")
     d.add_argument("--due", type=_date, default=None, help="완료한 회차의 마감일")
+
+    sv = sub.add_parser("serve", help="웹 대시보드 실행")
+    sv.add_argument("--host", default="127.0.0.1", help="바인딩 주소 (기본: 127.0.0.1, 이 PC에서만 접속)")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.add_argument("--fixed-date", type=_date, default=None, help="기준일 고정 (기본: 접속한 날)")
+
+    ex = sub.add_parser("export-html", help="대시보드를 HTML 파일 하나로 저장")
+    ex.add_argument("--out", type=Path, default=Path("reports/dashboard.html"))
+    ex.add_argument("--label", default="", help="대시보드 제목 옆에 붙일 설명")
     return p
 
 
@@ -127,6 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list(args, store)
     if args.command == "done":
         return cmd_done(args, store)
+    if args.command == "serve":
+        return cmd_serve(args, store)
+    if args.command == "export-html":
+        return cmd_export_html(args, store)
     return cmd_report(args, store)
 
 

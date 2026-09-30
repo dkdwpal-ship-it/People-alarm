@@ -91,3 +91,42 @@ def occurrences(s: Schedule, start: dt.date, end: dt.date) -> list[dt.date]:
         for d in _raw_dates(s, start - _MARGIN, end + _MARGIN)
     }
     return sorted(d for d in result if start <= d <= end)
+
+
+_WEEKDAY_KO = "월화수목금토일"
+_NTH_KO = {1: "첫째 주", 2: "둘째 주", 3: "셋째 주", 4: "넷째 주", 5: "다섯째 주", -1: "마지막 주"}
+
+
+def describe(s: Schedule) -> str:
+    """반복 규칙을 사람이 읽는 한국어 문장으로."""
+    if s.frequency == "once":
+        text = f"{s.date} (1회)"
+    elif s.frequency == "weekly":
+        text = f"매주 {_WEEKDAY_KO[s.weekday]}요일" if s.weekday is not None else "매주"
+    else:
+        if s.nth is not None and s.weekday is not None:
+            when = f"{_NTH_KO.get(s.nth, f'{s.nth}번째 주')} {_WEEKDAY_KO[s.weekday]}요일"
+        elif s.day == -1:
+            when = "말일"
+        else:
+            when = f"{s.day}일"
+        months = sorted(s.months)
+        if s.frequency == "monthly" and (not months or len(months) == 12):
+            text = f"매월 {when}"
+        else:
+            text = f"매년 {'·'.join(map(str, months))}월 {when}"
+    if s.holiday_rule == "before":
+        text += " · 휴일이면 전 영업일"
+    elif s.holiday_rule == "after":
+        text += " · 휴일이면 다음 영업일"
+    return text
+
+
+def holidays_between(start: dt.date, end: dt.date) -> dict[str, str]:
+    """구간 안의 한국 공휴일 {YYYY-MM-DD: 이름}."""
+    try:
+        import holidays
+    except ImportError:
+        return {}
+    kr = holidays.KR(years=range(start.year, end.year + 1))
+    return {d.isoformat(): name for d, name in sorted(kr.items()) if start <= d <= end}

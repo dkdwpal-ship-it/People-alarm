@@ -68,3 +68,11 @@ class Store:
 
     def mark_done(self, task_id: str, due: str) -> None:
         self._done.append(self._key(task_id, due))
+
+    def unmark_done(self, task_id: str, due: str) -> None:
+        key = self._key(task_id, due)
+        self._done = [k for k in self._done if k != key]
+
+    @property
+    def done_keys(self) -> list[str]:
+        return sorted(set(self._done))

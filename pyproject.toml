@@ -23,3 +23,6 @@ people-alarm = "people_alarm.cli:main"
 
 [tool.setuptools]
 packages = ["people_alarm"]
+
+[tool.setuptools.package-data]
+people_alarm = ["web/*.html"]
