@@ -140,3 +140,20 @@ def test_upload_rejects_bad_files(server):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(base + "/api/analyze", {"name": "없는문서.md"})
     assert e.value.code == 404
+
+
+def test_upload_real_docx_and_reject_drm(server, tmp_path):
+    import docx
+
+    base, _, data_dir = server
+    src = tmp_path / "src.docx"
+    d = docx.Document(); d.add_paragraph("매월 10일 원천세 신고"); d.save(src)
+    raw = src.read_bytes()
+    assert _upload(base + "/api/upload", "세무 매뉴얼.docx", raw).status == 202
+    assert (data_dir / "docs" / "세무 매뉴얼.docx").read_bytes() == raw  # 업로드 중 내용 손상 없음
+    assert _wait_docs(base)["세무 매뉴얼.docx"]["job"]["status"] == "done"
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _upload(base + "/api/upload", "보안문서.docx", b"<## DRM ##>" + b"\0" * 100)
+    assert e.value.code == 400 and "DRM" in json.load(e.value)["error"]
+    assert not (data_dir / "docs" / "보안문서.docx").exists()  # 거절된 파일은 저장하지 않음

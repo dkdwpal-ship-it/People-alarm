@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import csv
+import re
+import zipfile
 from pathlib import Path
 
 SUPPORTED_SUFFIXES = {".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md"}
@@ -20,10 +22,73 @@ def find_documents(root: Path) -> list[Path]:
     )
 
 
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # 옛 Office(97-2003)·암호화 Office 파일의 공통 헤더
+_KIND = {".docx": ("Word", "Word 문서(.docx)"), ".xlsx": ("엑셀", "Excel 통합 문서(.xlsx)"), ".xlsm": ("엑셀", "Excel 통합 문서(.xlsx)")}
+
+
+def _utf16(name: str) -> bytes:
+    return name.encode("utf-16-le")
+
+
+def check_format(name: str, data: bytes) -> None:
+    """확장자와 실제 파일 내용이 맞는지 확인. 읽을 수 없는 파일이면 이유를 담은 ValueError.
+
+    회사 보안 프로그램(DRM)으로 암호화된 파일, 비밀번호가 걸린 파일,
+    옛 형식(.doc/.xls)에 확장자만 바꾼 파일을 업로드 단계에서 알아듣기 쉽게 알려준다.
+    """
+    suffix = Path(name).suffix.lower()
+    if not data:
+        raise ValueError("빈 파일입니다.")
+    if suffix in _KIND:
+        app, save_as = _KIND[suffix]
+        if data.startswith(b"PK"):
+            return
+        if data.startswith(_OLE_MAGIC):
+            if _utf16("EncryptionInfo") in data or _utf16("EncryptedPackage") in data:
+                raise ValueError(
+                    f"비밀번호가 걸린 {app} 파일이라 읽을 수 없습니다. "
+                    f"{app}에서 [파일 → 정보 → 문서 보호]로 암호를 해제하고 저장한 뒤 다시 올려 주세요."
+                )
+            raise ValueError(
+                f"옛 {app} 97-2003 형식(.doc/.xls) 파일입니다. "
+                f"{app}에서 [다른 이름으로 저장 → {save_as}]로 저장한 뒤 다시 올려 주세요."
+            )
+        if data.lstrip()[:5] == b"%PDF-":
+            raise ValueError("내용은 PDF인데 확장자가 다릅니다. 확장자를 .pdf로 바꿔서 올려 주세요.")
+        raise ValueError(
+            f"{app} 파일 형식이 아닙니다. 회사 보안 프로그램(DRM)으로 암호화된 파일일 수 있습니다. "
+            f"보안을 해제하거나, {app}에서 PDF로 저장해서 올려 주세요."
+        )
+    if suffix == ".pdf" and b"%PDF-" not in data[:1024]:
+        raise ValueError(
+            "PDF 파일 형식이 아닙니다. 회사 보안 프로그램(DRM)으로 암호화된 파일일 수 있습니다. "
+            "보안을 해제한 뒤 다시 올려 주세요."
+        )
+
+
+def _docx_xml_text(path: Path) -> str:
+    """python-docx가 못 여는 비표준 .docx를 위한 대체 추출: 본문 XML에서 글자만 뽑는다."""
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/document.xml").decode("utf-8", errors="replace")
+    xml = re.sub(r"</w:p>|<w:br[^>]*/>|<w:tab[^>]*/>", "\n", xml)
+    text = re.sub(r"<[^>]+>", "", xml)
+    for ent, ch in (("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&apos;", "'"), ("&amp;", "&")):
+        text = text.replace(ent, ch)
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
 def _docx_text(path: Path) -> str:
     import docx  # python-docx
 
-    d = docx.Document(str(path))
+    try:
+        d = docx.Document(str(path))
+    except Exception:
+        # 형식 문제면 이유를 알려주고, 구조만 조금 다른 정상 파일이면 XML에서 직접 읽는다.
+        check_format(path.name, path.read_bytes())
+        try:
+            return _docx_xml_text(path)
+        except (zipfile.BadZipFile, KeyError) as e:
+            raise ValueError("Word 문서를 읽지 못했습니다. Word에서 다시 저장하거나 PDF로 저장해서 올려 주세요.") from e
     parts: list[str] = [p.text for p in d.paragraphs if p.text.strip()]
     for ti, table in enumerate(d.tables, 1):
         parts.append(f"\n[표 {ti}]")
@@ -73,6 +138,8 @@ def to_content_blocks(path: Path) -> list[dict]:
     나머지는 텍스트로 추출한다.
     """
     suffix = path.suffix.lower()
+    if suffix in (".pdf", ".xlsx", ".xlsm"):
+        check_format(path.name, path.read_bytes())
     if suffix == ".pdf":
         data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
         return [

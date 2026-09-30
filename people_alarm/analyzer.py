@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .loaders import SUPPORTED_SUFFIXES, find_documents
+from .loaders import SUPPORTED_SUFFIXES, check_format, find_documents
 from .models import Task
 from .store import Store, file_hash
 
@@ -71,10 +71,9 @@ class Analyzer:
     # --- 요청 처리 ---
     def save_upload(self, raw_name: str, body: bytes) -> str:
         name = safe_filename(raw_name)
-        if not body:
-            raise ValueError("빈 파일입니다.")
         if len(body) > MAX_UPLOAD_BYTES:
             raise ValueError("파일이 너무 큽니다 (최대 32MB).")
+        check_format(name, body)  # DRM·암호·옛 형식 파일은 저장하기 전에 이유와 함께 거절
         self.docs_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.docs_dir / f".{name}.uploading"
         tmp.write_bytes(body)
