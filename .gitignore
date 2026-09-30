@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.env
+# 개인 업무 문서와 추출 결과는 저장소에 올리지 않음
+docs/*
+!docs/README.md
+data/
+reports/

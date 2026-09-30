@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "people-alarm"
+version = "0.1.0"
+description = "업무 문서를 읽어 시기별 업무 리스트를 알려주는 agent"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=1.9",
+    "pydantic>=2",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "holidays>=0.50",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+people-alarm = "people_alarm.cli:main"
+
+[tool.setuptools]
+packages = ["people_alarm"]
