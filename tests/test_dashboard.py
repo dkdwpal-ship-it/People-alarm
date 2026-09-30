@@ -2,7 +2,9 @@ import datetime as dt
 import json
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
+import time
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -48,13 +50,39 @@ def test_payload_and_page(tmp_path):
     assert "<!doctype" not in render_page(payload, standalone=False)
 
 
+def fake_extract(path, today):
+    if "broken" in path.name:
+        raise TypeError("Could not resolve authentication method. Expected one of api_key ...")
+    return [Task.from_extracted(
+        ExtractedTask(title=f"{path.stem} 업무", description="d", category="세무", owner=None,
+                      schedule=Schedule(frequency="monthly", day=10), lead_days=2, evidence="e"),
+        source=path.name,
+    )]
+
+
 @pytest.fixture
 def server(tmp_path):
     task = _seed(tmp_path)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(tmp_path, D(2026, 9, 30)))
+    handler = make_handler(tmp_path, D(2026, 9, 30), docs_dir=tmp_path / "docs", extract=fake_extract)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_port}", task, tmp_path
     httpd.shutdown()
+
+
+def _upload(url, name, data):
+    req = urllib.request.Request(url, data=data, method="POST", headers={
+        "Content-Type": "application/octet-stream", "X-Filename": urllib.parse.quote(name)})
+    return urllib.request.urlopen(req)
+
+
+def _wait_docs(base):
+    for _ in range(100):
+        body = json.load(urllib.request.urlopen(base + "/api/documents"))
+        if not body["busy"]:
+            return {d["name"]: d for d in body["documents"]}
+        time.sleep(0.05)
+    raise AssertionError("분석이 끝나지 않음")
 
 
 def _post(url, body, content_type="application/json"):
@@ -79,4 +107,36 @@ def test_server_routes(server):
     assert e.value.code == 415
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(base + "/api/done", {"taskId": "nope", "due": "2026-09-23", "done": True})
+    assert e.value.code == 404
+
+
+def test_upload_and_analyze(server):
+    base, _, data_dir = server
+    res = _upload(base + "/api/upload", "../../원천세 가이드.md", "매월 10일 원천세".encode())
+    assert res.status == 202 and json.load(res)["name"] == "원천세 가이드.md"
+    assert (data_dir / "docs" / "원천세 가이드.md").exists()  # 경로 조작 없이 docs 안에 저장
+
+    docs = _wait_docs(base)
+    doc = docs["원천세 가이드.md"]
+    assert doc["job"]["status"] == "done" and doc["analyzed"] and doc["taskCount"] == 1
+    titles = [t["title"] for t in json.load(urllib.request.urlopen(base + "/api/dashboard"))["tasks"]]
+    assert "원천세 가이드 업무" in titles and "급여 지급 </script>" in titles  # 기존 업무 유지
+
+    _upload(base + "/api/upload", "broken.txt", b"x")
+    doc = _wait_docs(base)["broken.txt"]
+    assert doc["job"]["status"] == "error" and "API 키" in doc["job"]["error"]
+
+    res = _post(base + "/api/analyze", {"name": "원천세 가이드.md"})
+    assert res.status == 202
+    assert _wait_docs(base)["원천세 가이드.md"]["taskCount"] == 1  # 다시 분석해도 중복 없음
+
+
+def test_upload_rejects_bad_files(server):
+    base, _, _ = server
+    for name, data, code in [("a.hwp", b"x", 400), (".hidden.md", b"x", 400), ("empty.md", b"", 400)]:
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _upload(base + "/api/upload", name, data)
+        assert e.value.code == code, name
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(base + "/api/analyze", {"name": "없는문서.md"})
     assert e.value.code == 404

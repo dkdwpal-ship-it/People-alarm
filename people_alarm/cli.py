@@ -100,7 +100,7 @@ def cmd_done(args, store: Store) -> int:
 def cmd_serve(args, store: Store) -> int:
     from .server import serve
 
-    serve(args.data, args.host, args.port, default_date=args.fixed_date)
+    serve(args.data, args.host, args.port, default_date=args.fixed_date, docs_dir=args.docs)
     return 0
 
 
@@ -139,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1", help="바인딩 주소 (기본: 127.0.0.1, 이 PC에서만 접속)")
     sv.add_argument("--port", type=int, default=8000)
     sv.add_argument("--fixed-date", type=_date, default=None, help="기준일 고정 (기본: 접속한 날)")
+    sv.add_argument("--docs", type=Path, default=Path("docs"), help="업로드 문서 저장 폴더 (기본: docs)")
 
     ex = sub.add_parser("export-html", help="대시보드를 HTML 파일 하나로 저장")
     ex.add_argument("--out", type=Path, default=Path("reports/dashboard.html"))

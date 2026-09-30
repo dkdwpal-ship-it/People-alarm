@@ -37,7 +37,13 @@ people-alarm export-html            # reports/dashboard.html 파일 하나로 �
 - **전체 업무**: 반복 규칙, 준비 기간, 다음 마감일, 출처 문서를 검색할 수 있는 표.
 - 분류 칩으로 급여·세무 등 원하는 분류만 볼 수 있고, 기준일을 바꿔 과거·미래 시점도 볼 수 있습니다.
 
-`serve`는 기본적으로 이 PC(127.0.0.1)에서만 접속됩니다. `export-html`로 만든 파일은 서버 없이 열리며,
+- **업무 문서** (`serve`에서만): 문서를 끌어다 놓거나 **문서 올리기** 버튼으로 올리면 `docs/`에 저장되고
+  바로 분석이 시작됩니다. 한 건씩 차례로 분석하며, 끝나면 업무 리스트·달력이 새로고침 없이 갱신됩니다.
+  문서마다 분석 상태(대기 중 / 분석 중 / 업무 n건 / 분석 실패)와 **다시 분석** 버튼이 있습니다.
+  같은 이름으로 다시 올리면 그 문서의 업무가 새 분석 결과로 바뀝니다.
+
+`serve`는 기본적으로 이 PC(127.0.0.1)에서만 접속됩니다. 문서 분석을 쓰려면 `serve` 실행 전에
+`ANTHROPIC_API_KEY`를 설정하세요. `export-html`로 만든 파일은 서버 없이 열리며,
 완료 표시는 그 브라우저에만 저장됩니다.
 
 샘플 데이터로 체험: `python -m people_alarm --data examples/data serve --fixed-date 2026-09-30`
@@ -112,6 +118,7 @@ people_alarm/
   report.py     기간별 리스트 계산 + 마크다운 렌더링
   dashboard.py  대시보드 데이터(payload) + HTML 생성
   server.py     로컬 웹 서버 (serve)
+  analyzer.py   업로드 문서 백그라운드 분석 큐
   web/dashboard.html  대시보드 화면
   cli.py        명령줄 인터페이스
 tests/          pytest 테스트

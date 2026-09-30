@@ -60,6 +60,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: 400 14px/1.55 var(--font-body);
@@ -202,6 +203,30 @@ blockquote { margin: 0; padding-left: 10px; border-left: 2px solid var(--line); 
   padding: 6px 9px; border-radius: 6px; white-space: nowrap; transform: translate(-50%, calc(-100% - 8px));
 }
 
+/* ---- documents ---- */
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }
+.btn.small { padding: 4px 10px; font-size: 12.5px; }
+.docs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 16px; align-items: start; }
+.drop {
+  display: grid; place-items: center; gap: 6px; text-align: center; padding: 22px 16px; min-height: 150px;
+  border: 1.5px dashed var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--fg-2); cursor: pointer;
+}
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop strong { color: var(--fg); font-size: 15px; }
+.drop small { color: var(--muted); }
+.doc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.doc {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+}
+.doc-name { font-weight: 600; overflow-wrap: anywhere; }
+.doc-meta { font-size: 12px; color: var(--muted); font-family: var(--font-data); }
+.doc-side { display: flex; align-items: center; gap: 8px; justify-content: end; flex-wrap: wrap; }
+.doc-error { grid-column: 1 / -1; font-size: 12.5px; color: var(--crit); }
+.spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block; animation: spin .8s linear infinite; vertical-align: -2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ---- catalog ---- */
 .search { flex: 1 1 220px; max-width: 320px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--surface); }
 .table-wrap { overflow-x: auto; }
@@ -213,7 +238,7 @@ tbody tr:hover { background: var(--surface-2); }
 .src { color: var(--muted); font-size: 12px; }
 
 @media (max-width: 960px) {
-  .main { grid-template-columns: minmax(0, 1fr); }
+  .main, .docs { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
   .wrap { padding-inline: 16px; }
@@ -225,7 +250,7 @@ tbody tr:hover { background: var(--surface-2); }
   .ev, .evmore, .hname { display: none; }
   .dots { display: flex; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } .spin { animation-duration: 3s; } }
 </style>
 
 <div class="wrap">
@@ -242,6 +267,7 @@ tbody tr:hover { background: var(--surface-2); }
         <input type="date" id="date-input">
       </div>
       <button class="btn" id="today-btn" type="button">오늘로</button>
+      <button class="btn primary" id="upload-btn" type="button" hidden>문서 올리기</button>
     </div>
   </header>
 
@@ -281,6 +307,22 @@ tbody tr:hover { background: var(--surface-2); }
       </section>
     </div>
   </div>
+
+  <section class="panel" id="docs-panel" aria-labelledby="docs-title">
+    <div class="panel-head">
+      <h2 id="docs-title">업무 문서</h2>
+      <span class="meta" id="docs-meta"></span>
+    </div>
+    <div class="docs">
+      <label class="drop" id="drop" for="file-input">
+        <strong>문서를 끌어다 놓거나 눌러서 선택</strong>
+        <span>올리면 바로 분석해서 업무 리스트에 추가합니다</span>
+        <small>Word(.docx) · PDF · 엑셀(.xlsx, .csv) · 텍스트(.txt, .md) · 최대 32MB</small>
+      </label>
+      <input type="file" id="file-input" multiple accept=".docx,.pdf,.xlsx,.xlsm,.csv,.txt,.md" hidden>
+      <div class="group" id="doc-list-wrap"></div>
+    </div>
+  </section>
 
   <section class="panel" aria-labelledby="catalog-title">
     <div class="panel-head">
@@ -604,10 +646,117 @@ tbody tr:hover { background: var(--surface-2); }
   });
   chartEl.addEventListener("pointerleave", () => { const tip = $("tip"); if (tip) tip.hidden = true; });
 
+  // ---- 문서 업로드·분석 (serve 모드) ----
+  const ALLOWED = [".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md"];
+  const MAX_BYTES = 32 * 1024 * 1024;
+  let docs = [];
+  let pollTimer = null;
+  const jobSeen = {}; // 문서별 마지막 상태 (완료 알림용)
+
+  const sizeText = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+  function docStatus(d) {
+    const j = d.job;
+    if (j && j.status === "queued") return `<span class="pill">대기 중</span>`;
+    if (j && j.status === "running") return `<span class="pill" data-tone="accent"><span class="spin"></span> 분석 중</span>`;
+    if (j && j.status === "error") return `<span class="pill" data-tone="crit">분석 실패</span><button class="btn small" type="button" data-analyze="${esc(d.name)}">다시 시도</button>`;
+    if (d.analyzed) return `<span class="pill" data-tone="good">업무 ${d.taskCount}건</span><button class="btn small" type="button" data-analyze="${esc(d.name)}">다시 분석</button>`;
+    return `<span class="pill" data-tone="warn">분석 전</span><button class="btn small" type="button" data-analyze="${esc(d.name)}">분석</button>`;
+  }
+
+  function renderDocs() {
+    const wrap = $("doc-list-wrap");
+    if (data.mode !== "server") {
+      $("drop").hidden = true;
+      wrap.innerHTML = `<div class="empty">이 화면은 읽기 전용 스냅샷입니다. 문서를 올리고 분석하려면 <code>people-alarm serve</code>로 대시보드를 실행하세요.</div>`;
+      $("docs-meta").textContent = "";
+      return;
+    }
+    const analyzing = docs.filter((d) => d.job && (d.job.status === "queued" || d.job.status === "running")).length;
+    $("docs-meta").textContent = docs.length ? `문서 ${docs.length}개${analyzing ? ` · 분석 중 ${analyzing}개` : ""}` : "";
+    wrap.innerHTML = docs.length
+      ? `<ul class="doc-list">${docs.map((d) => `<li class="doc">
+          <div><div class="doc-name">${esc(d.name)}</div><div class="doc-meta">${sizeText(d.size)} · ${d.modified.replace("T", " ")}</div></div>
+          <div class="doc-side">${docStatus(d)}</div>
+          ${d.job && d.job.status === "error" ? `<div class="doc-error">${esc(d.job.error)}</div>` : ""}
+        </li>`).join("")}</ul>`
+      : `<div class="empty">아직 올린 문서가 없습니다. 왼쪽에 문서를 끌어다 놓으세요.</div>`;
+  }
+
+  async function refreshData() {
+    const res = await fetch(`api/dashboard?date=${S.today}`);
+    if (!res.ok) return;
+    data = await res.json(); done = new Set(data.done); reindex(); renderAll();
+  }
+
+  async function loadDocs() {
+    clearTimeout(pollTimer);
+    try {
+      const res = await fetch("api/documents");
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      docs = body.documents;
+    } catch (e) { notify(`문서 목록을 불러오지 못했습니다: ${e.message}`, "error"); return; }
+    let finished = [];
+    for (const d of docs) {
+      const st = d.job && d.job.status;
+      const before = jobSeen[d.name];
+      if ((before === "queued" || before === "running") && st === "done") finished.push(`${d.name} → 업무 ${d.job.taskCount}건`);
+      if ((before === "queued" || before === "running") && st === "error") notify(`${d.name} 분석 실패: ${d.job.error}`, "error");
+      jobSeen[d.name] = st;
+    }
+    renderDocs();
+    if (finished.length) { await refreshData(); notify(`분석 완료: ${finished.join(", ")}`); }
+    if (docs.some((d) => d.job && (d.job.status === "queued" || d.job.status === "running"))) pollTimer = setTimeout(loadDocs, 2000);
+  }
+
+  async function uploadFiles(files) {
+    for (const f of files) {
+      const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+      if (!ALLOWED.includes(ext)) { notify(`${f.name}: 지원하지 않는 형식입니다. HWP는 PDF나 DOCX로 저장해서 올려 주세요.`, "error"); continue; }
+      if (f.size > MAX_BYTES) { notify(`${f.name}: 32MB보다 커서 올릴 수 없습니다.`, "error"); continue; }
+      notify(`${f.name} 올리는 중…`);
+      try {
+        const res = await fetch("api/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(f.name) }, body: f });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error);
+        jobSeen[body.name] = "queued";
+        notify(`${body.name} 분석을 시작했습니다.`);
+      } catch (e) { notify(`${f.name} 업로드 실패: ${e.message}`, "error"); }
+      await loadDocs();
+    }
+  }
+
+  async function analyze(name) {
+    try {
+      const res = await fetch("api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      jobSeen[name] = "queued";
+      notify(`${name} 분석을 시작했습니다.`);
+    } catch (e) { notify(`분석을 시작하지 못했습니다: ${e.message}`, "error"); }
+    loadDocs();
+  }
+
+  if (data.mode === "server") {
+    $("upload-btn").hidden = false;
+    $("upload-btn").addEventListener("click", () => $("file-input").click());
+    $("file-input").addEventListener("change", (e) => { uploadFiles([...e.target.files]); e.target.value = ""; });
+    const drop = $("drop");
+    ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); uploadFiles([...e.dataTransfer.files]); });
+    document.addEventListener("click", (e) => { const b = e.target.closest("[data-analyze]"); if (b) analyze(b.dataset.analyze); });
+    loadDocs();
+  }
+
   reindex();
   renderAll();
+  renderDocs();
   if (!data.tasks.length) {
-    $("groups").innerHTML = `<div class="empty">아직 업무가 없습니다. docs/ 폴더에 업무 문서를 넣고 <code>people-alarm ingest</code>를 실행하세요.</div>`;
+    $("groups").innerHTML = data.mode === "server"
+      ? `<div class="empty">아직 업무가 없습니다. 아래 <b>업무 문서</b>에 문서를 올리면 분석해서 채워 넣습니다.</div>`
+      : `<div class="empty">아직 업무가 없습니다. docs/ 폴더에 업무 문서를 넣고 <code>people-alarm ingest</code>를 실행하세요.</div>`;
   }
 })();
 </script>
