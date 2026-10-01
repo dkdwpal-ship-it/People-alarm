@@ -10,30 +10,35 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from .config import active
 from .loaders import SUPPORTED_SUFFIXES, check_format, find_documents
 from .models import Task
 from .store import Store, file_hash
 
 Extractor = Callable[[Path, dt.date], list[Task]]
-MAX_UPLOAD_BYTES = 32 * 1024 * 1024  # Claude API 요청 한도와 맞춤
+MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 
 
 def friendly_error(e: Exception) -> str:
     """분석 실패 사유를 사용자에게 보여줄 문장으로."""
     try:
-        import anthropic
+        import openai
     except ImportError:  # pragma: no cover
         return str(e)
-    if isinstance(e, anthropic.AuthenticationError):
-        return "API 키가 올바르지 않습니다. ANTHROPIC_API_KEY를 확인하세요."
-    if isinstance(e, anthropic.RateLimitError):
-        return "요청이 많아 잠시 거절되었습니다. 잠시 후 다시 분석하세요."
-    if isinstance(e, anthropic.APIConnectionError):
-        return "Anthropic API에 연결하지 못했습니다. 네트워크를 확인하세요."
-    if isinstance(e, anthropic.BadRequestError):
-        return f"문서를 처리하지 못했습니다: {e.message}"
-    if isinstance(e, TypeError) and "api_key" in str(e).lower():
-        return "API 키가 설정되지 않았습니다. ANTHROPIC_API_KEY를 설정하고 serve를 다시 실행하세요."
+    cfg = active()
+    if isinstance(e, openai.APITimeoutError):
+        return f"사내 LLM 서버 응답이 {cfg.timeout}초 안에 오지 않았습니다. 서버가 바쁘면 잠시 후 다시 분석하세요."
+    if isinstance(e, openai.APIConnectionError):
+        return f"사내 LLM 서버({cfg.base_url})에 연결하지 못했습니다. 서버가 켜져 있는지, 사내망에 연결되어 있는지 확인하세요."
+    if isinstance(e, openai.NotFoundError):
+        return f"LLM 서버에서 모델 '{cfg.model}'을(를) 찾지 못했습니다. `people-alarm check-llm`으로 모델 이름을 확인하세요."
+    if isinstance(e, openai.BadRequestError):
+        msg = str(getattr(e, "message", e))
+        if "context" in msg.lower() and "length" in msg.lower():
+            return "문서 조각이 모델의 최대 입력 길이를 넘었습니다. PEOPLE_ALARM_LLM_CHUNK_CHARS 값을 줄여 주세요."
+        return f"LLM 서버가 요청을 거절했습니다: {msg}"
+    if isinstance(e, openai.APIStatusError):
+        return f"LLM 서버 오류(HTTP {e.status_code})입니다. 잠시 후 다시 분석하세요."
     return str(e) or e.__class__.__name__
 
 

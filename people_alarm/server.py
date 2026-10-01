@@ -9,13 +9,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .config import active
 from .analyzer import MAX_UPLOAD_BYTES, Analyzer, Extractor
 from .dashboard import build_payload, render_page
 from .store import Store
 
 
 def _default_extractor(path: Path, today: dt.date):
-    from .extractor import extract_tasks  # anthropic은 분석할 때만 필요
+    from .extractor import extract_tasks
 
     return extract_tasks(path, reference_date=today)
 
@@ -90,7 +91,8 @@ def make_handler(
             if url.path == "/api/documents":
                 docs = analyzer.documents()
                 busy = any(d["job"] and d["job"]["status"] in ("queued", "running") for d in docs)
-                return self._json(HTTPStatus.OK, {"documents": docs, "busy": busy})
+                cfg = active()
+                return self._json(HTTPStatus.OK, {"documents": docs, "busy": busy, "llm": {"model": cfg.model, "url": cfg.base_url}})
             self._error(HTTPStatus.NOT_FOUND, "not found")
 
         # ---- POST ----

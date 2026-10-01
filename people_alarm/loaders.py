@@ -1,8 +1,7 @@
-"""업무 문서(Word/PDF/엑셀/텍스트)를 Claude에 보낼 content block으로 변환."""
+"""업무 문서(Word/PDF/엑셀/텍스트)에서 LLM에 보낼 텍스트를 추출."""
 
 from __future__ import annotations
 
-import base64
 import csv
 import re
 import zipfile
@@ -131,32 +130,37 @@ def _plain_text(path: Path) -> str:
     raise ValueError(f"텍스트 인코딩을 읽을 수 없습니다: {path}")
 
 
-def to_content_blocks(path: Path) -> list[dict]:
-    """문서 하나를 Claude 메시지 content block 목록으로 변환.
+def _pdf_text(path: Path) -> str:
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
 
-    PDF는 그대로 document block으로 보내 표·스캔본까지 Claude가 직접 읽게 하고,
-    나머지는 텍스트로 추출한다.
-    """
+    try:
+        reader = PdfReader(str(path))
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise ValueError("비밀번호가 걸린 PDF라 읽을 수 없습니다. 암호를 해제하고 다시 저장해서 올려 주세요.")
+        pages = [page.extract_text() or "" for page in reader.pages]
+    except PdfReadError as e:
+        raise ValueError("PDF를 읽지 못했습니다. 파일이 손상되었거나 보안이 걸려 있을 수 있습니다.") from e
+    if not any(p.strip() for p in pages):
+        raise ValueError(
+            "PDF에 글자 정보가 없습니다(스캔한 이미지 PDF). 원본 Word/한글 파일을 올리거나 OCR 처리한 PDF를 올려 주세요."
+        )
+    return "\n\n".join(f"[{i}쪽]\n{t.strip()}" for i, t in enumerate(pages, 1) if t.strip())
+
+
+def extract_text(path: Path) -> str:
+    """문서 하나에서 LLM에 보낼 텍스트를 뽑는다. 읽을 수 없으면 이유를 담은 ValueError."""
     suffix = path.suffix.lower()
     if suffix in (".pdf", ".xlsx", ".xlsm"):
         check_format(path.name, path.read_bytes())
     if suffix == ".pdf":
-        data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
-        return [
-            {
-                "type": "document",
-                "source": {"type": "base64", "media_type": "application/pdf", "data": data},
-                "title": path.name,
-            }
-        ]
+        return _pdf_text(path)
     if suffix == ".docx":
-        text = _docx_text(path)
-    elif suffix in (".xlsx", ".xlsm"):
-        text = _xlsx_text(path)
-    elif suffix == ".csv":
-        text = _csv_text(path)
-    elif suffix in (".txt", ".md"):
-        text = _plain_text(path)
-    else:
-        raise ValueError(f"지원하지 않는 형식: {path.suffix}")
-    return [{"type": "text", "text": f"<document name=\"{path.name}\">\n{text}\n</document>"}]
+        return _docx_text(path)
+    if suffix in (".xlsx", ".xlsm"):
+        return _xlsx_text(path)
+    if suffix == ".csv":
+        return _csv_text(path)
+    if suffix in (".txt", ".md"):
+        return _plain_text(path)
+    raise ValueError(f"지원하지 않는 형식: {path.suffix}")

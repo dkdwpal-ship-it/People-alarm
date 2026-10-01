@@ -6,17 +6,17 @@
 ## 동작 방식
 
 ```
-docs/ 업무 문서 ──(1) ingest: Claude가 문서 분석──▶ data/tasks.json (업무 + 반복 규칙)
+docs/ 업무 문서 ──(1) ingest: 사내 LLM이 문서 분석──▶ data/tasks.json (업무 + 반복 규칙)
                                                         │
                            (2) today/week/month: 날짜 계산(LLM 호출 없음)
                                                         ▼
                                   업무 리스트 (터미널 출력 + reports/*.md 저장)
 ```
 
-1. **추출 (`ingest`)** — 문서마다 Claude(`claude-opus-5-5`)가 시기가 정해진 업무를 찾아
-   `매월 25일`, `분기 말일`, `매주 월요일`, `매년 3월 10일` 같은 **반복 규칙**으로 구조화합니다.
-   근거 문장(evidence)과 준비 기간(lead_days)도 함께 저장합니다.
-   바뀐 문서만 다시 분석하므로(파일 해시 비교) 매번 비용이 들지 않습니다.
+1. **추출 (`ingest`)** — 문서에서 글자를 뽑아 사내 vLLM 서버(`thinkingcap`)에 보내고,
+   시기가 정해진 업무를 `매월 25일`, `분기 말일`, `매주 월요일`, `매년 3월 10일` 같은
+   **반복 규칙**으로 구조화합니다. 근거 문장(evidence)과 준비 기간(lead_days)도 함께 저장합니다.
+   바뀐 문서만 다시 분석합니다(파일 해시 비교). 긴 문서는 나눠서 보내고 결과를 합칩니다.
 2. **조회 (`today`/`week`/`month`/`next-month`)** — 저장된 규칙으로 날짜를 계산합니다.
    한국 공휴일·주말을 반영해 "휴일이면 전/다음 영업일" 규칙을 적용하고, 다음을 보여줍니다.
    - 📅 해당 기간에 마감되는 업무 (D-day 표시)
@@ -42,8 +42,7 @@ people-alarm export-html            # reports/dashboard.html 파일 하나로 �
   문서마다 분석 상태(대기 중 / 분석 중 / 업무 n건 / 분석 실패)와 **다시 분석** 버튼이 있습니다.
   같은 이름으로 다시 올리면 그 문서의 업무가 새 분석 결과로 바뀝니다.
 
-`serve`는 기본적으로 이 PC(127.0.0.1)에서만 접속됩니다. 문서 분석을 쓰려면 `serve` 실행 전에
-`ANTHROPIC_API_KEY`를 설정하세요. `export-html`로 만든 파일은 서버 없이 열리며,
+`serve`는 기본적으로 이 PC(127.0.0.1)에서만 접속됩니다. `export-html`로 만든 파일은 서버 없이 열리며,
 완료 표시는 그 브라우저에만 저장됩니다.
 
 샘플 데이터로 체험: `python -m people_alarm --data examples/data serve --fixed-date 2026-09-30`
@@ -52,8 +51,36 @@ people-alarm export-html            # reports/dashboard.html 파일 하나로 �
 
 ```bash
 pip install -e .            # 개발용 테스트까지: pip install -e ".[dev]"
-export ANTHROPIC_API_KEY=... # ingest(문서 분석)에만 필요
+people-alarm check-llm      # 사내 LLM 서버 연결 확인
 ```
+
+## 사내 LLM 설정
+
+문서 분석은 사내 vLLM 서버(OpenAI 호환 API)를 씁니다. API 키는 필요 없습니다.
+기본값은 아래와 같고, 환경 변수나 명령 옵션으로 바꿀 수 있습니다.
+
+| 항목 | 기본값 | 환경 변수 | 명령 옵션 |
+|---|---|---|---|
+| 서버 주소 | `http://75.12.15.121:8000/v1` | `PEOPLE_ALARM_LLM_URL` | `--llm-url` |
+| 모델 | `thinkingcap` | `PEOPLE_ALARM_LLM_MODEL` | `--llm-model` |
+| 요청 대기 시간(초) | 600 | `PEOPLE_ALARM_LLM_TIMEOUT` | |
+| 응답 최대 토큰 | 8192 | `PEOPLE_ALARM_LLM_MAX_TOKENS` | |
+| 문서 조각 크기(글자) | 12000 | `PEOPLE_ALARM_LLM_CHUNK_CHARS` | |
+| API 키 | 없음 | `PEOPLE_ALARM_LLM_API_KEY` (vLLM에 `--api-key`를 건 경우만) | |
+| 프록시 사용 | 안 함 | `PEOPLE_ALARM_LLM_USE_PROXY=1` | |
+
+```bash
+people-alarm check-llm                                   # 연결·모델 이름·응답 확인
+people-alarm --llm-model other-model ingest              # 일회성으로 다른 모델 사용
+```
+
+- 사내 서버 IP로 직접 붙도록 기본적으로 `HTTP_PROXY` 같은 프록시 설정을 무시합니다.
+  프록시를 거쳐야만 서버에 닿는 환경이면 `PEOPLE_ALARM_LLM_USE_PROXY=1`을 설정하세요.
+- 서버가 JSON 스키마 강제(`response_format: json_schema`)를 지원하면 그것을 쓰고,
+  지원하지 않으면 자동으로 일반 응답에서 JSON을 골라냅니다. `<think>…</think>` 추론 텍스트는 무시합니다.
+- 모델 응답이 길이 제한에서 잘리면 문서 조각을 반으로 나눠 다시 시도합니다.
+  "최대 입력 길이를 넘었다"는 오류가 나면 `PEOPLE_ALARM_LLM_CHUNK_CHARS`를 줄이고,
+  "응답이 잘렸다"는 오류가 나면 `PEOPLE_ALARM_LLM_MAX_TOKENS`를 늘리세요.
 
 ## 사용법
 
@@ -73,7 +100,7 @@ people-alarm list                   # 추출된 전체 업무와 다음 마감�
 people-alarm done 5a016e1dac        # 업무 완료 처리 (id는 리스트에 표시됨)
 ```
 
-샘플 데이터로 바로 체험하기 (API 키 불필요):
+샘플 데이터로 바로 체험하기 (LLM 서버 불필요):
 
 ```bash
 python -m people_alarm --data examples/data --date 2026-09-30 week
@@ -110,8 +137,9 @@ python -m people_alarm --data examples/data --date 2026-09-30 week
 
 ```
 people_alarm/
-  loaders.py    문서 → 텍스트/PDF 블록 변환 (docx, pdf, xlsx, csv, txt, md)
-  extractor.py  Claude 구조화 출력으로 업무 추출
+  loaders.py    문서 → 텍스트 추출 (docx, pdf, xlsx, csv, txt, md) + 파일 형식 검사
+  config.py     사내 LLM 연결 설정
+  extractor.py  사내 LLM으로 업무 추출 (조각 나누기, JSON 해석·재시도)
   models.py     Task / Schedule 데이터 모델
   schedule.py   반복 규칙 → 실제 날짜 계산 (한국 공휴일 반영)
   store.py      data/tasks.json, data/done.json 저장소
@@ -127,4 +155,5 @@ tests/          pytest 테스트
 ## 참고
 
 - HWP 파일은 직접 읽지 못합니다. 한글에서 PDF나 DOCX로 저장해 넣어 주세요.
-- 문서 내용은 분석을 위해 Anthropic API로 전송됩니다. `docs/`, `data/`, `reports/`는 git에서 제외됩니다.
+- PDF는 글자 정보가 있어야 합니다. 스캔한 이미지 PDF는 원본 파일이나 OCR 처리한 PDF를 쓰세요.
+- 문서 내용은 사내 LLM 서버로만 전송되고 외부로 나가지 않습니다. `docs/`, `data/`, `reports/`는 git에서 제외됩니다.

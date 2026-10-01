@@ -6,15 +6,18 @@
   people-alarm done <id> [--due YYYY-MM-DD]
   people-alarm serve [--port 8000]   # 웹 대시보드
   people-alarm export-html           # 대시보드를 HTML 파일 하나로 저장
+  people-alarm check-llm             # 사내 LLM 서버 연결 확인
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import re
 import sys
 from pathlib import Path
 
+from .config import LLMConfig, active, make_client, set_active
 from .loaders import find_documents
 from .report import TITLES, build_report, render_markdown
 from .schedule import occurrences
@@ -26,7 +29,10 @@ def _date(s: str) -> dt.date:
 
 
 def cmd_ingest(args, store: Store) -> int:
-    from .extractor import extract_tasks  # anthropic은 ingest에서만 필요
+    from .extractor import extract_tasks
+    from .analyzer import friendly_error
+
+    print(f"LLM: {active().model} @ {active().base_url}")
 
     docs = find_documents(args.docs)
     if not docs:
@@ -45,7 +51,7 @@ def cmd_ingest(args, store: Store) -> int:
             tasks = extract_tasks(path, reference_date=args.date)
         except Exception as e:  # 한 문서 실패가 전체를 멈추지 않도록
             failed += 1
-            print(f"  ! 실패: {e}", file=sys.stderr)
+            print(f"  ! 실패: {friendly_error(e)}", file=sys.stderr)
             continue
         store.replace_document_tasks(path, tasks)
         store.save()
@@ -114,10 +120,43 @@ def cmd_export_html(args, store: Store) -> int:
     return 0
 
 
+def cmd_check_llm(args, store: Store) -> int:
+    import openai
+
+    from .analyzer import friendly_error
+
+    cfg = active()
+    print(f"서버: {cfg.base_url}\n모델: {cfg.model}")
+    client = make_client(cfg)
+    try:
+        models = [m.id for m in client.models.list()]
+    except openai.OpenAIError as e:
+        print(f"✗ 연결 실패: {friendly_error(e)}")
+        return 1
+    print(f"✓ 연결됨. 서버의 모델: {', '.join(models) or '(없음)'}")
+    if cfg.model not in models:
+        print(f"✗ '{cfg.model}' 모델이 목록에 없습니다. --llm-model 또는 PEOPLE_ALARM_LLM_MODEL로 위 이름 중 하나를 지정하세요.")
+        return 1
+    try:
+        resp = client.chat.completions.create(
+            model=cfg.model, max_tokens=1024, temperature=0,
+            messages=[{"role": "user", "content": "'OK'라고만 답하세요."}],
+        )
+    except openai.OpenAIError as e:
+        print(f"✗ 응답 테스트 실패: {friendly_error(e)}")
+        return 1
+    raw = resp.choices[0].message.content or ""
+    answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).split("</think>")[-1].strip()
+    print(f"✓ 응답 테스트 성공: {answer[:80]!r}" if answer else "✓ 응답은 왔지만 본문이 비어 있습니다 (추론 단계에서 길이 제한에 걸렸을 수 있음).")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="people-alarm", description="업무 문서 기반 시기별 업무 알림 agent")
     p.add_argument("--data", type=Path, default=Path("data"), help="업무 저장 폴더 (기본: data)")
     p.add_argument("--date", type=_date, default=dt.date.today(), help="기준일 YYYY-MM-DD (기본: 오늘)")
+    p.add_argument("--llm-url", default=None, help="사내 LLM 서버 주소 (기본: PEOPLE_ALARM_LLM_URL 또는 http://75.12.15.121:8000/v1)")
+    p.add_argument("--llm-model", default=None, help="모델 이름 (기본: PEOPLE_ALARM_LLM_MODEL 또는 thinkingcap)")
     sub = p.add_subparsers(dest="command", required=True)
 
     ing = sub.add_parser("ingest", help="문서에서 업무 추출")
@@ -144,11 +183,14 @@ def build_parser() -> argparse.ArgumentParser:
     ex = sub.add_parser("export-html", help="대시보드를 HTML 파일 하나로 저장")
     ex.add_argument("--out", type=Path, default=Path("reports/dashboard.html"))
     ex.add_argument("--label", default="", help="대시보드 제목 옆에 붙일 설명")
+
+    sub.add_parser("check-llm", help="사내 LLM 서버 연결과 모델 확인")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    set_active(LLMConfig.from_env(base_url=args.llm_url and args.llm_url.rstrip("/"), model=args.llm_model))
     store = Store(args.data)
     if args.command == "ingest":
         return cmd_ingest(args, store)
@@ -158,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_done(args, store)
     if args.command == "serve":
         return cmd_serve(args, store)
+    if args.command == "check-llm":
+        return cmd_check_llm(args, store)
     if args.command == "export-html":
         return cmd_export_html(args, store)
     return cmd_report(args, store)

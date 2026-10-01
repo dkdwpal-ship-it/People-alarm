@@ -650,6 +650,7 @@ tbody tr:hover { background: var(--surface-2); }
   const ALLOWED = [".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md"];
   const MAX_BYTES = 32 * 1024 * 1024;
   let docs = [];
+  let llm = null;
   let pollTimer = null;
   const jobSeen = {}; // 문서별 마지막 상태 (완료 알림용)
 
@@ -673,7 +674,11 @@ tbody tr:hover { background: var(--surface-2); }
       return;
     }
     const analyzing = docs.filter((d) => d.job && (d.job.status === "queued" || d.job.status === "running")).length;
-    $("docs-meta").textContent = docs.length ? `문서 ${docs.length}개${analyzing ? ` · 분석 중 ${analyzing}개` : ""}` : "";
+    const parts = [];
+    if (docs.length) parts.push(`문서 ${docs.length}개`);
+    if (analyzing) parts.push(`분석 중 ${analyzing}개`);
+    if (llm) parts.push(`분석 모델 ${llm.model}`);
+    $("docs-meta").textContent = parts.join(" · ");
     wrap.innerHTML = docs.length
       ? `<ul class="doc-list">${docs.map((d) => `<li class="doc">
           <div><div class="doc-name">${esc(d.name)}</div><div class="doc-meta">${sizeText(d.size)} · ${d.modified.replace("T", " ")}</div></div>
@@ -696,6 +701,7 @@ tbody tr:hover { background: var(--surface-2); }
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
       docs = body.documents;
+      llm = body.llm || null;
     } catch (e) { notify(`문서 목록을 불러오지 못했습니다: ${e.message}`, "error"); return; }
     let finished = [];
     for (const d of docs) {

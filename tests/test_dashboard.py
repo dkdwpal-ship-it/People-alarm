@@ -52,7 +52,7 @@ def test_payload_and_page(tmp_path):
 
 def fake_extract(path, today):
     if "broken" in path.name:
-        raise TypeError("Could not resolve authentication method. Expected one of api_key ...")
+        raise ValueError("문서에서 읽을 수 있는 글자가 없습니다.")
     return [Task.from_extracted(
         ExtractedTask(title=f"{path.stem} 업무", description="d", category="세무", owner=None,
                       schedule=Schedule(frequency="monthly", day=10), lead_days=2, evidence="e"),
@@ -124,7 +124,7 @@ def test_upload_and_analyze(server):
 
     _upload(base + "/api/upload", "broken.txt", b"x")
     doc = _wait_docs(base)["broken.txt"]
-    assert doc["job"]["status"] == "error" and "API 키" in doc["job"]["error"]
+    assert doc["job"]["status"] == "error" and "글자가 없습니다" in doc["job"]["error"]
 
     res = _post(base + "/api/analyze", {"name": "원천세 가이드.md"})
     assert res.status == 202
@@ -157,3 +157,24 @@ def test_upload_real_docx_and_reject_drm(server, tmp_path):
         _upload(base + "/api/upload", "보안문서.docx", b"<## DRM ##>" + b"\0" * 100)
     assert e.value.code == 400 and "DRM" in json.load(e.value)["error"]
     assert not (data_dir / "docs" / "보안문서.docx").exists()  # 거절된 파일은 저장하지 않음
+
+
+def test_documents_reports_llm_and_friendly_connection_error(server):
+    import openai
+
+    from people_alarm.analyzer import friendly_error
+    from people_alarm.config import LLMConfig, make_client, set_active
+
+    base, _, _ = server
+    body = json.load(urllib.request.urlopen(base + "/api/documents"))
+    assert body["llm"]["model"] == "thinkingcap"
+
+    cfg = LLMConfig(base_url="http://127.0.0.1:9/v1", timeout=2)
+    set_active(cfg)
+    try:
+        with pytest.raises(openai.APIConnectionError) as e:
+            make_client(cfg).models.list()
+        msg = friendly_error(e.value)
+        assert "http://127.0.0.1:9/v1" in msg and "연결하지 못했습니다" in msg
+    finally:
+        set_active(LLMConfig.from_env())

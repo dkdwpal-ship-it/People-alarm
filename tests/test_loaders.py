@@ -1,7 +1,7 @@
 import docx
 import openpyxl
 
-from people_alarm.loaders import find_documents, to_content_blocks
+from people_alarm.loaders import extract_text, find_documents
 
 
 def test_docx_and_xlsx_to_text(tmp_path):
@@ -24,18 +24,43 @@ def test_docx_and_xlsx_to_text(tmp_path):
     docs = find_documents(tmp_path)
     assert [p.name for p in docs] == ["calendar.xlsx", "manual.docx"]
 
-    xlsx_text = to_content_blocks(docs[0])[0]["text"]
+    xlsx_text = extract_text(docs[0])
     assert "[시트: 연간일정]" in xlsx_text and "3 | 법인세 신고" in xlsx_text
 
-    docx_text = to_content_blocks(docs[1])[0]["text"]
+    docx_text = extract_text(docs[1])
     assert "원천세" in docx_text and "연말정산 | 1월" in docx_text
 
 
-def test_pdf_is_sent_as_document_block(tmp_path):
-    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.4 fake")
-    block = to_content_blocks(tmp_path / "a.pdf")[0]
-    assert block["type"] == "document"
-    assert block["source"]["media_type"] == "application/pdf"
+def _make_pdf(text: str | None) -> bytes:
+    """글자 한 줄짜리(또는 글자 없는) 최소 PDF."""
+    stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode() if text else b""
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out, offsets = b"%PDF-1.4\n", []
+    for i, o in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + o + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+def test_pdf_text_extraction(tmp_path):
+    (tmp_path / "a.pdf").write_bytes(_make_pdf("Payroll on the 25th"))
+    assert "Payroll on the 25th" in extract_text(tmp_path / "a.pdf")
+
+
+def test_scanned_pdf_without_text(tmp_path):
+    (tmp_path / "scan.pdf").write_bytes(_make_pdf(None))
+    with pytest.raises(ValueError, match="스캔"):
+        extract_text(tmp_path / "scan.pdf")
 
 
 import zipfile
@@ -74,7 +99,7 @@ def test_docx_fallback_for_nonstandard_package(tmp_path):
         z.writestr("word/document.xml",
                    '<w:document><w:body><w:p><w:r><w:t>매월 10일 원천세 신고 &amp; 납부</w:t></w:r></w:p>'
                    '<w:p><w:r><w:t>분기 말 성과 점검</w:t></w:r></w:p></w:body></w:document>')
-    text = to_content_blocks(path)[0]["text"]
+    text = extract_text(path)
     assert "매월 10일 원천세 신고 & 납부\n분기 말 성과 점검" in text
 
 
@@ -82,4 +107,4 @@ def test_unreadable_docx_gives_friendly_error(tmp_path):
     path = tmp_path / "drm.docx"
     path.write_bytes(b"<## DRM ##>" + b"\0" * 100)
     with pytest.raises(ValueError, match="DRM"):
-        to_content_blocks(path)
+        extract_text(path)
