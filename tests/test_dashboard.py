@@ -159,22 +159,7 @@ def test_upload_real_docx_and_reject_drm(server, tmp_path):
     assert not (data_dir / "docs" / "보안문서.docx").exists()  # 거절된 파일은 저장하지 않음
 
 
-def test_documents_reports_llm_and_friendly_connection_error(server):
-    import openai
-
-    from people_alarm.analyzer import friendly_error
-    from people_alarm.config import LLMConfig, make_client, set_active
-
+def test_documents_reports_llm(server):
     base, _, _ = server
     body = json.load(urllib.request.urlopen(base + "/api/documents"))
     assert body["llm"]["model"] == "thinkingcap"
-
-    cfg = LLMConfig(base_url="http://127.0.0.1:9/v1", timeout=2)
-    set_active(cfg)
-    try:
-        with pytest.raises(openai.APIConnectionError) as e:
-            make_client(cfg).models.list()
-        msg = friendly_error(e.value)
-        assert "http://127.0.0.1:9/v1" in msg and "연결하지 못했습니다" in msg
-    finally:
-        set_active(LLMConfig.from_env())

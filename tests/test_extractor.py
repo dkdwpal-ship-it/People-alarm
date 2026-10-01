@@ -45,6 +45,7 @@ def test_structured_request_to_vllm(tmp_path, fake):
     assert "$ref" not in json.dumps(req["response_format"])  # 스키마를 펼쳐서 보냄
     assert "기준일: 2026-10-01" in req["messages"][1]["content"]
     assert [t.title for t in tasks] == ["급여 지급"] and tasks[0].source == "guide.md"
+    assert server.auth_headers == [None]  # API 키·인증 헤더를 보내지 않음
 
 
 def test_falls_back_when_server_rejects_json_schema(tmp_path, fake):
@@ -99,3 +100,31 @@ def test_split_text():
     chunks = split_text(text, 110)
     assert len(chunks) == 2 and "".join(chunks) == text
     assert all(len(c) <= 200 for c in split_text("x" * 500, 200))
+
+
+def test_client_errors_and_check_llm(fake, capsys):
+    from people_alarm.analyzer import friendly_error
+    from people_alarm.cli import main
+    from people_alarm.config import LLMConfig, make_client, set_active
+    from people_alarm.llm import LLMConnectionError, LLMHTTPError
+
+    server, cfg = fake(lambda m, r: ("<think>음</think>OK", "stop"))
+    assert main(["--llm-url", server.url, "check-llm"]) == 0
+    out = capsys.readouterr().out
+    assert "인증: 사용 안 함" in out and "'OK'" in out
+    assert all(h is None for h in server.auth_headers)
+
+    wrong = LLMConfig(base_url=server.url, model="gpt-x", timeout=5)
+    set_active(wrong)
+    try:
+        with pytest.raises(LLMHTTPError) as e:
+            make_client(wrong).chat([{"role": "user", "content": "hi"}], max_tokens=5)
+        assert e.value.status == 404 and "gpt-x" in friendly_error(e.value)
+
+        down = LLMConfig(base_url="http://127.0.0.1:9/v1", timeout=2)
+        set_active(down)
+        with pytest.raises(LLMConnectionError) as e:
+            make_client(down).list_models()
+        assert "http://127.0.0.1:9/v1" in friendly_error(e.value)
+    finally:
+        set_active(LLMConfig.from_env())

@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .config import LLMConfig, active, make_client
+from .llm import LLMHTTPError
 from .loaders import extract_text
 from .models import ExtractedTask, ExtractionResult, Task
 
@@ -127,28 +128,24 @@ def parse_tasks(content: str) -> list[ExtractedTask]:
 
 def _complete(client, cfg: LLMConfig, messages: list[dict]) -> tuple[str, str]:
     """(응답 본문, finish_reason). 구조화 출력이 안 되는 서버면 자동으로 일반 모드로 바꾼다."""
-    from openai import BadRequestError
-
-    kwargs = dict(model=cfg.model, messages=messages, temperature=0, max_tokens=cfg.max_tokens)
     if _structured_supported.get(cfg.base_url, True):
         try:
-            resp = client.chat.completions.create(
-                **kwargs,
+            result = client.chat(
+                messages,
+                max_tokens=cfg.max_tokens,
                 response_format={
                     "type": "json_schema",
                     "json_schema": {"name": "extraction", "schema": RESPONSE_SCHEMA},
                 },
             )
             _structured_supported[cfg.base_url] = True
-        except BadRequestError as e:
-            if "context" in str(e).lower() and "length" in str(e).lower():
+            return result
+        except LLMHTTPError as e:
+            msg = e.message.lower()
+            if e.status != 400 or ("context" in msg and "length" in msg):
                 raise
             _structured_supported[cfg.base_url] = False
-            resp = client.chat.completions.create(**kwargs)
-    else:
-        resp = client.chat.completions.create(**kwargs)
-    choice = resp.choices[0]
-    return choice.message.content or "", choice.finish_reason or ""
+    return client.chat(messages, max_tokens=cfg.max_tokens)
 
 
 def _extract_chunk(client, cfg: LLMConfig, name: str, chunk: str, part: str, today: dt.date) -> list[ExtractedTask]:

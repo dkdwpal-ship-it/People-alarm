@@ -121,16 +121,15 @@ def cmd_export_html(args, store: Store) -> int:
 
 
 def cmd_check_llm(args, store: Store) -> int:
-    import openai
-
     from .analyzer import friendly_error
+    from .llm import LLMError
 
     cfg = active()
-    print(f"서버: {cfg.base_url}\n모델: {cfg.model}")
+    print(f"서버: {cfg.base_url}\n모델: {cfg.model}\n인증: 사용 안 함")
     client = make_client(cfg)
     try:
-        models = [m.id for m in client.models.list()]
-    except openai.OpenAIError as e:
+        models = client.list_models()
+    except LLMError as e:
         print(f"✗ 연결 실패: {friendly_error(e)}")
         return 1
     print(f"✓ 연결됨. 서버의 모델: {', '.join(models) or '(없음)'}")
@@ -138,14 +137,10 @@ def cmd_check_llm(args, store: Store) -> int:
         print(f"✗ '{cfg.model}' 모델이 목록에 없습니다. --llm-model 또는 PEOPLE_ALARM_LLM_MODEL로 위 이름 중 하나를 지정하세요.")
         return 1
     try:
-        resp = client.chat.completions.create(
-            model=cfg.model, max_tokens=1024, temperature=0,
-            messages=[{"role": "user", "content": "'OK'라고만 답하세요."}],
-        )
-    except openai.OpenAIError as e:
+        raw, _ = client.chat([{"role": "user", "content": "'OK'라고만 답하세요."}], max_tokens=1024)
+    except LLMError as e:
         print(f"✗ 응답 테스트 실패: {friendly_error(e)}")
         return 1
-    raw = resp.choices[0].message.content or ""
     answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).split("</think>")[-1].strip()
     print(f"✓ 응답 테스트 성공: {answer[:80]!r}" if answer else "✓ 응답은 왔지만 본문이 비어 있습니다 (추론 단계에서 길이 제한에 걸렸을 수 있음).")
     return 0

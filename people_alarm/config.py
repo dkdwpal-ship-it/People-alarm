@@ -1,9 +1,8 @@
-"""사내 LLM(vLLM, OpenAI 호환 API) 연결 설정.
+"""사내 LLM(vLLM, OpenAI 호환 API) 연결 설정. 인증(API 키)은 쓰지 않는다.
 
 환경 변수로 바꿀 수 있다.
   PEOPLE_ALARM_LLM_URL          기본 http://75.12.15.121:8000/v1
   PEOPLE_ALARM_LLM_MODEL        기본 thinkingcap
-  PEOPLE_ALARM_LLM_API_KEY      기본 없음 (vLLM에 --api-key를 걸었을 때만)
   PEOPLE_ALARM_LLM_TIMEOUT      요청 하나의 최대 대기 초 (기본 600)
   PEOPLE_ALARM_LLM_MAX_TOKENS   응답 최대 토큰 (기본 8192)
   PEOPLE_ALARM_LLM_CHUNK_CHARS  문서를 나눠 보낼 때 한 조각의 최대 글자 수 (기본 12000)
@@ -28,7 +27,6 @@ def _int(name: str, default: int) -> int:
 class LLMConfig:
     base_url: str = DEFAULT_URL
     model: str = DEFAULT_MODEL
-    api_key: str = ""
     timeout: int = 600
     max_tokens: int = 8192
     chunk_chars: int = 12000
@@ -39,7 +37,6 @@ class LLMConfig:
         cfg = cls(
             base_url=os.environ.get("PEOPLE_ALARM_LLM_URL", DEFAULT_URL).rstrip("/"),
             model=os.environ.get("PEOPLE_ALARM_LLM_MODEL", DEFAULT_MODEL),
-            api_key=os.environ.get("PEOPLE_ALARM_LLM_API_KEY", ""),
             timeout=_int("PEOPLE_ALARM_LLM_TIMEOUT", 600),
             max_tokens=_int("PEOPLE_ALARM_LLM_MAX_TOKENS", 8192),
             chunk_chars=_int("PEOPLE_ALARM_LLM_CHUNK_CHARS", 12000),
@@ -62,13 +59,6 @@ def active() -> LLMConfig:
 
 
 def make_client(cfg: LLMConfig):
-    from openai import DefaultHttpxClient, OpenAI
+    from .llm import LLMClient
 
-    return OpenAI(
-        base_url=cfg.base_url,
-        api_key=cfg.api_key or "EMPTY",  # vLLM은 키를 검사하지 않지만 SDK가 빈 값을 거부함
-        timeout=cfg.timeout,
-        max_retries=1,
-        # 사내 서버 IP로 직접 붙도록 기본은 프록시 환경 변수를 무시한다.
-        http_client=DefaultHttpxClient(trust_env=cfg.use_proxy, timeout=cfg.timeout),
-    )
+    return LLMClient(cfg)

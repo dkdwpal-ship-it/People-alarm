@@ -19,6 +19,7 @@ class FakeVLLM:
         self.model = model
         self.reject_schema = reject_schema
         self.requests: list[dict] = []
+        self.auth_headers: list[str | None] = []  # 요청마다 받은 Authorization 헤더
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -31,11 +32,13 @@ class FakeVLLM:
                 self.wfile.write(body)
 
             def do_GET(self):  # noqa: N802
+                fake.auth_headers.append(self.headers.get("Authorization"))
                 if self.path == "/v1/models":
                     return self._json(200, {"object": "list", "data": [{"id": fake.model, "object": "model"}]})
                 self._json(404, {"error": "nf"})
 
             def do_POST(self):  # noqa: N802
+                fake.auth_headers.append(self.headers.get("Authorization"))
                 req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append(req)
                 if req["model"] != fake.model:

@@ -56,7 +56,8 @@ people-alarm check-llm      # 사내 LLM 서버 연결 확인
 
 ## 사내 LLM 설정
 
-문서 분석은 사내 vLLM 서버(OpenAI 호환 API)를 씁니다. API 키는 필요 없습니다.
+문서 분석은 사내 vLLM 서버(OpenAI 호환 API)를 씁니다. API 키나 인증 없이 서버 주소와 모델 이름만으로 연결합니다
+(별도 라이브러리 없이 파이썬 기본 기능으로 호출하며, 인증 헤더를 보내지 않습니다).
 기본값은 아래와 같고, 환경 변수나 명령 옵션으로 바꿀 수 있습니다.
 
 | 항목 | 기본값 | 환경 변수 | 명령 옵션 |
@@ -66,7 +67,6 @@ people-alarm check-llm      # 사내 LLM 서버 연결 확인
 | 요청 대기 시간(초) | 600 | `PEOPLE_ALARM_LLM_TIMEOUT` | |
 | 응답 최대 토큰 | 8192 | `PEOPLE_ALARM_LLM_MAX_TOKENS` | |
 | 문서 조각 크기(글자) | 12000 | `PEOPLE_ALARM_LLM_CHUNK_CHARS` | |
-| API 키 | 없음 | `PEOPLE_ALARM_LLM_API_KEY` (vLLM에 `--api-key`를 건 경우만) | |
 | 프록시 사용 | 안 함 | `PEOPLE_ALARM_LLM_USE_PROXY=1` | |
 
 ```bash

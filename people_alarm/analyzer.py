@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from .config import active
+from .llm import LLMConnectionError, LLMHTTPError, LLMTimeoutError
 from .loaders import SUPPORTED_SUFFIXES, check_format, find_documents
 from .models import Task
 from .store import Store, file_hash
@@ -21,24 +22,22 @@ MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 
 def friendly_error(e: Exception) -> str:
     """분석 실패 사유를 사용자에게 보여줄 문장으로."""
-    try:
-        import openai
-    except ImportError:  # pragma: no cover
-        return str(e)
     cfg = active()
-    if isinstance(e, openai.APITimeoutError):
+    if isinstance(e, LLMTimeoutError):
         return f"사내 LLM 서버 응답이 {cfg.timeout}초 안에 오지 않았습니다. 서버가 바쁘면 잠시 후 다시 분석하세요."
-    if isinstance(e, openai.APIConnectionError):
+    if isinstance(e, LLMConnectionError):
         return f"사내 LLM 서버({cfg.base_url})에 연결하지 못했습니다. 서버가 켜져 있는지, 사내망에 연결되어 있는지 확인하세요."
-    if isinstance(e, openai.NotFoundError):
-        return f"LLM 서버에서 모델 '{cfg.model}'을(를) 찾지 못했습니다. `people-alarm check-llm`으로 모델 이름을 확인하세요."
-    if isinstance(e, openai.BadRequestError):
-        msg = str(getattr(e, "message", e))
-        if "context" in msg.lower() and "length" in msg.lower():
+    if isinstance(e, LLMHTTPError):
+        msg = e.message.lower()
+        if e.status == 404 and "model" in msg:
+            return f"LLM 서버에서 모델 '{cfg.model}'을(를) 찾지 못했습니다. `people-alarm check-llm`으로 모델 이름을 확인하세요."
+        if e.status == 404:
+            return f"LLM 서버 주소가 맞지 않습니다({cfg.base_url}). 주소가 /v1로 끝나는지 확인하세요."
+        if "context" in msg and "length" in msg:
             return "문서 조각이 모델의 최대 입력 길이를 넘었습니다. PEOPLE_ALARM_LLM_CHUNK_CHARS 값을 줄여 주세요."
-        return f"LLM 서버가 요청을 거절했습니다: {msg}"
-    if isinstance(e, openai.APIStatusError):
-        return f"LLM 서버 오류(HTTP {e.status_code})입니다. 잠시 후 다시 분석하세요."
+        if e.status == 400:
+            return f"LLM 서버가 요청을 거절했습니다: {e.message}"
+        return f"LLM 서버 오류(HTTP {e.status})입니다. 잠시 후 다시 분석하세요."
     return str(e) or e.__class__.__name__
 
 
