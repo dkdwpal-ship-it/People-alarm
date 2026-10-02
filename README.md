@@ -133,6 +133,22 @@ python -m people_alarm --data examples/data --date 2026-09-30 week
 50 8 * * 1-5  cd /path/to/People-alarm && people-alarm today --save
 ```
 
+## 문제 해결
+
+**"ANTHROPIC_API_KEY를 설정하라"는 문구가 나와요** → 예전 버전 코드가 실행되고 있습니다.
+지금 버전은 Anthropic을 쓰지 않고, 그 문구도 코드에 없습니다. 아래 순서로 다시 설치하세요.
+
+```bash
+# 1) 실행 중인 serve 창에서 Ctrl+C로 종료
+git pull
+pip uninstall -y people-alarm
+pip install -e .            # -e를 꼭 붙이세요 (붙이지 않으면 코드가 복사되어 git pull이 반영되지 않음)
+people-alarm --version      # people-alarm 0.3.0 (코드 위치: …/People-alarm/people_alarm) 이 나오면 정상
+people-alarm serve
+```
+
+`serve`를 켜면 첫 줄에 버전과 코드 위치가, 대시보드의 업무 문서 칸 오른쪽 위에 버전이 표시됩니다.
+
 ## 프로젝트 구조
 
 ```

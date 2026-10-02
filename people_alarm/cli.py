@@ -24,6 +24,13 @@ from .schedule import occurrences
 from .store import Store
 
 
+def version_text() -> str:
+    """실행 중인 코드의 버전과 위치 (예전 코드가 실행되는지 확인용)."""
+    from . import __version__
+
+    return f"people-alarm {__version__} (코드 위치: {Path(__file__).resolve().parent})"
+
+
 def _date(s: str) -> dt.date:
     return dt.date.fromisoformat(s)
 
@@ -125,6 +132,7 @@ def cmd_check_llm(args, store: Store) -> int:
     from .llm import LLMError
 
     cfg = active()
+    print(version_text())
     print(f"서버: {cfg.base_url}\n모델: {cfg.model}\n인증: 사용 안 함")
     client = make_client(cfg)
     try:
@@ -148,6 +156,7 @@ def cmd_check_llm(args, store: Store) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="people-alarm", description="업무 문서 기반 시기별 업무 알림 agent")
+    p.add_argument("--version", action="version", version=version_text())
     p.add_argument("--data", type=Path, default=Path("data"), help="업무 저장 폴더 (기본: data)")
     p.add_argument("--date", type=_date, default=dt.date.today(), help="기준일 YYYY-MM-DD (기본: 오늘)")
     p.add_argument("--llm-url", default=None, help="사내 LLM 서버 주소 (기본: PEOPLE_ALARM_LLM_URL 또는 http://75.12.15.121:8000/v1)")

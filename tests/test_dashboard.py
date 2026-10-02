@@ -163,3 +163,5 @@ def test_documents_reports_llm(server):
     base, _, _ = server
     body = json.load(urllib.request.urlopen(base + "/api/documents"))
     assert body["llm"]["model"] == "thinkingcap"
+    from people_alarm import __version__
+    assert body["version"] == __version__

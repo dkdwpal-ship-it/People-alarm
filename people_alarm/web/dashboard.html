@@ -651,6 +651,7 @@ tbody tr:hover { background: var(--surface-2); }
   const MAX_BYTES = 32 * 1024 * 1024;
   let docs = [];
   let llm = null;
+  let appVersion = "";
   let pollTimer = null;
   const jobSeen = {}; // 문서별 마지막 상태 (완료 알림용)
 
@@ -678,6 +679,7 @@ tbody tr:hover { background: var(--surface-2); }
     if (docs.length) parts.push(`문서 ${docs.length}개`);
     if (analyzing) parts.push(`분석 중 ${analyzing}개`);
     if (llm) parts.push(`분석 모델 ${llm.model}`);
+    if (appVersion) parts.push(`v${appVersion}`);
     $("docs-meta").textContent = parts.join(" · ");
     wrap.innerHTML = docs.length
       ? `<ul class="doc-list">${docs.map((d) => `<li class="doc">
@@ -702,6 +704,7 @@ tbody tr:hover { background: var(--surface-2); }
       if (!res.ok) throw new Error(body.error);
       docs = body.documents;
       llm = body.llm || null;
+      appVersion = body.version || "";
     } catch (e) { notify(`문서 목록을 불러오지 못했습니다: ${e.message}`, "error"); return; }
     let finished = [];
     for (const d of docs) {

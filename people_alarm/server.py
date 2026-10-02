@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from . import __version__
 from .config import active
 from .analyzer import MAX_UPLOAD_BYTES, Analyzer, Extractor
 from .dashboard import build_payload, render_page
@@ -92,7 +93,7 @@ def make_handler(
                 docs = analyzer.documents()
                 busy = any(d["job"] and d["job"]["status"] in ("queued", "running") for d in docs)
                 cfg = active()
-                return self._json(HTTPStatus.OK, {"documents": docs, "busy": busy, "llm": {"model": cfg.model, "url": cfg.base_url}})
+                return self._json(HTTPStatus.OK, {"documents": docs, "busy": busy, "llm": {"model": cfg.model, "url": cfg.base_url}, "version": __version__})
             self._error(HTTPStatus.NOT_FOUND, "not found")
 
         # ---- POST ----
@@ -157,7 +158,12 @@ def make_handler(
 
 
 def serve(data_dir: Path, host: str, port: int, default_date: dt.date | None = None, docs_dir: Path = Path("docs")) -> None:
+    from . import __version__
+
     httpd = ThreadingHTTPServer((host, port), make_handler(data_dir, default_date, docs_dir))
+    cfg = active()
+    print(f"people-alarm {__version__}  (코드 위치: {Path(__file__).resolve().parent})")
+    print(f"분석 LLM: {cfg.model} @ {cfg.base_url}  (API 키 사용 안 함)")
     print(f"대시보드: http://{host}:{port}  (문서 폴더: {docs_dir}, 종료: Ctrl+C)")
     try:
         httpd.serve_forever()
