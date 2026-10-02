@@ -1,4 +1,4 @@
-"""사내 LLM(vLLM)으로 문서에서 시기별 업무를 추출."""
+"""사내 LLM(vLLM)으로 문서·메일에서 시기별 업무를 추출."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from .config import LLMConfig, active, make_client
 from .llm import LLMHTTPError
 from .loaders import extract_text
+from .mail import MAIL_SUFFIXES, read_mail
 from .models import ExtractedTask, ExtractionResult, Task
 
 SYSTEM_PROMPT = """\
@@ -42,6 +43,20 @@ SYSTEM_PROMPT = """\
   "category": "세무", "owner": "인사팀", "lead_days": 7, "evidence": "매월 10일까지 원천세 신고",
   "schedule": {"frequency": "monthly", "date": null, "months": [], "day": 10, "weekday": null,
                "nth": null, "holiday_rule": "after"}}]}
+"""
+
+MAIL_GUIDE = """\
+이 문서는 사내 인트라넷(그룹웨어)에서 발송된 메일입니다. 메일 추출 기준:
+- 기준일은 메일을 보낸 날짜입니다. "오늘", "금주 금요일", "다음 주 화요일", "이달 말", "10/15(수)"처럼
+  상대적이거나 연도가 없는 날짜는 보낸 날짜를 기준으로 실제 날짜(YYYY-MM-DD)로 바꿔 once로 넣습니다.
+- 공지·요청 메일의 마감(제출·신청·회신·결재·등록 기한)과 교육·회의·행사 일시를 업무로 추출합니다.
+  "매월 5일까지 제출"처럼 메일에 반복 규칙이 있으면 반복 규칙으로 넣습니다.
+- 신청·제출 기간이 있으면 끝 날짜를 기준일로, 시작일까지의 일수를 lead_days로 넣습니다.
+  시작일이 보낸 날짜보다 이르면 보낸 날짜부터 끝 날짜까지의 일수를 lead_days로 넣습니다.
+- 마감 연장·일정 변경 메일이면 변경된 날짜만 추출합니다. 회신·전달 메일에 인용된 이전 메일과
+  최신 본문이 다르면 최신 본문을 따릅니다.
+- owner에는 요청한 부서나 담당자(보낸 사람)를 넣고, evidence에는 메일 원문 문장을 넣습니다.
+- 할 일이 없는 단순 안내·광고 메일이면 {"tasks": []}를 출력합니다.
 """
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -148,9 +163,11 @@ def _complete(client, cfg: LLMConfig, messages: list[dict]) -> tuple[str, str]:
     return client.chat(messages, max_tokens=cfg.max_tokens)
 
 
-def _extract_chunk(client, cfg: LLMConfig, name: str, chunk: str, part: str, today: dt.date) -> list[ExtractedTask]:
+def _extract_chunk(
+    client, cfg: LLMConfig, name: str, chunk: str, part: str, today: dt.date, guide: str = ""
+) -> list[ExtractedTask]:
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT + ("\n" + guide if guide else "")},
         {
             "role": "user",
             "content": (
@@ -165,7 +182,7 @@ def _extract_chunk(client, cfg: LLMConfig, name: str, chunk: str, part: str, tod
         # 응답이 잘렸으면 문서를 반으로 나눠 다시 시도한다.
         if len(chunk) >= _MIN_SPLIT_CHARS:
             half = split_text(chunk, len(chunk) // 2 + 1)
-            return [t for sub in half for t in _extract_chunk(client, cfg, name, sub, part, today)]
+            return [t for sub in half for t in _extract_chunk(client, cfg, name, sub, part, today, guide)]
         raise LLMOutputError(
             "LLM 응답이 최대 길이에서 잘렸습니다. PEOPLE_ALARM_LLM_MAX_TOKENS 값을 늘려 주세요."
         )
@@ -187,17 +204,24 @@ def extract_tasks(
     client=None,
     config: LLMConfig | None = None,
 ) -> list[Task]:
-    """문서 하나에서 업무 목록을 추출한다. 긴 문서는 나눠서 보내고 결과를 합친다."""
+    """문서 하나에서 업무 목록을 추출한다. 긴 문서는 나눠서 보내고 결과를 합친다.
+
+    메일(.eml/.msg)은 메일을 보낸 날짜를 기준일로 삼아 "이번 주 금요일" 같은 날짜를 해석한다.
+    """
     cfg = config or active()
     client = client or make_client(cfg)
     text = extract_text(path)
     if not text.strip():
         raise ValueError("문서에서 읽을 수 있는 글자가 없습니다.")
+    guide = ""
+    if path.suffix.lower() in MAIL_SUFFIXES:
+        reference_date = read_mail(path).sent_date or reference_date
+        guide = MAIL_GUIDE
     chunks = split_text(text, cfg.chunk_chars)
     found: dict[str, Task] = {}
     for i, chunk in enumerate(chunks, 1):
         part = f" (전체 {len(chunks)}개 중 {i}번째 부분)" if len(chunks) > 1 else ""
-        for t in _extract_chunk(client, cfg, path.name, chunk, part, reference_date):
+        for t in _extract_chunk(client, cfg, path.name, chunk, part, reference_date, guide):
             task = Task.from_extracted(t, source=path.name)
             found.setdefault(task.id, task)  # 조각마다 겹친 업무는 하나로
     return list(found.values())

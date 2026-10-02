@@ -1,4 +1,4 @@
-"""업무 문서(Word/PDF/엑셀/텍스트)에서 LLM에 보낼 텍스트를 추출."""
+"""업무 문서(Word/PDF/엑셀/텍스트)와 사내 메일(.eml/.msg)에서 LLM에 보낼 텍스트를 추출."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import re
 import zipfile
 from pathlib import Path
 
-SUPPORTED_SUFFIXES = {".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md"}
+SUPPORTED_SUFFIXES = {".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md", ".eml", ".msg"}
 
 
 def find_documents(root: Path) -> list[Path]:
@@ -58,6 +58,13 @@ def check_format(name: str, data: bytes) -> None:
             f"{app} 파일 형식이 아닙니다. 회사 보안 프로그램(DRM)으로 암호화된 파일일 수 있습니다. "
             f"보안을 해제하거나, {app}에서 PDF로 저장해서 올려 주세요."
         )
+    if suffix == ".msg" and not data.startswith(_OLE_MAGIC):
+        raise ValueError(
+            "Outlook 메일(.msg) 형식이 아닙니다. 회사 보안 프로그램(DRM)으로 암호화된 파일일 수 있습니다. "
+            "메일 프로그램에서 .eml로 저장해서 올려 주세요."
+        )
+    if suffix == ".eml" and not re.search(rb"^[A-Za-z-]+:", data.lstrip()[:2048], re.MULTILINE):
+        raise ValueError("메일(.eml) 형식이 아닙니다. 그룹웨어의 [EML로 저장] 또는 [원본 저장]으로 받은 파일을 올려 주세요.")
     if suffix == ".pdf" and b"%PDF-" not in data[:1024]:
         raise ValueError(
             "PDF 파일 형식이 아닙니다. 회사 보안 프로그램(DRM)으로 암호화된 파일일 수 있습니다. "
@@ -151,7 +158,7 @@ def _pdf_text(path: Path) -> str:
 def extract_text(path: Path) -> str:
     """문서 하나에서 LLM에 보낼 텍스트를 뽑는다. 읽을 수 없으면 이유를 담은 ValueError."""
     suffix = path.suffix.lower()
-    if suffix in (".pdf", ".xlsx", ".xlsm"):
+    if suffix in (".pdf", ".xlsx", ".xlsm", ".eml", ".msg"):
         check_format(path.name, path.read_bytes())
     if suffix == ".pdf":
         return _pdf_text(path)
@@ -163,4 +170,8 @@ def extract_text(path: Path) -> str:
         return _csv_text(path)
     if suffix in (".txt", ".md"):
         return _plain_text(path)
+    if suffix in (".eml", ".msg"):
+        from .mail import mail_to_text, read_mail
+
+        return mail_to_text(read_mail(path))
     raise ValueError(f"지원하지 않는 형식: {path.suffix}")

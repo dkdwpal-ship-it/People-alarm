@@ -1,6 +1,8 @@
 """명령줄 인터페이스.
 
-  people-alarm ingest            # docs/ 문서에서 업무 추출 (바뀐 문서만)
+  people-alarm ingest            # docs/ 문서·메일에서 업무 추출 (바뀐 문서만)
+  people-alarm add-mail <파일.eml|.msg|-> [--subject ...]  # 인트라넷 메일 추가 + 바로 분석
+  people-alarm fetch-mail [--days 7]                         # 사내 메일 서버(IMAP)에서 가져와 분석
   people-alarm today|week|month|next-month [--date YYYY-MM-DD] [--save]
   people-alarm list              # 추출된 전체 업무
   people-alarm done <id> [--due YYYY-MM-DD]
@@ -35,27 +37,16 @@ def _date(s: str) -> dt.date:
     return dt.date.fromisoformat(s)
 
 
-def cmd_ingest(args, store: Store) -> int:
-    from .extractor import extract_tasks
+def _analyze(paths: list[Path], store: Store, date: dt.date) -> int:
+    """문서·메일을 차례로 분석해 저장. 실패한 개수를 반환."""
     from .analyzer import friendly_error
+    from .extractor import extract_tasks
 
-    print(f"LLM: {active().model} @ {active().base_url}")
-
-    docs = find_documents(args.docs)
-    if not docs:
-        print(f"{args.docs} 폴더에 문서가 없습니다. (.docx .pdf .xlsx .csv .txt .md)")
-        return 1
-    removed = store.remove_missing_documents({p.name for p in docs})
-    for name in removed:
-        print(f"- 삭제된 문서의 업무 제거: {name}")
     failed = 0
-    for path in docs:
-        if not args.force and store.is_unchanged(path):
-            print(f"= 변경 없음: {path.name}")
-            continue
+    for path in paths:
         print(f"* 분석 중: {path.name} ...", flush=True)
         try:
-            tasks = extract_tasks(path, reference_date=args.date)
+            tasks = extract_tasks(path, reference_date=date)
         except Exception as e:  # 한 문서 실패가 전체를 멈추지 않도록
             failed += 1
             print(f"  ! 실패: {friendly_error(e)}", file=sys.stderr)
@@ -63,9 +54,93 @@ def cmd_ingest(args, store: Store) -> int:
         store.replace_document_tasks(path, tasks)
         store.save()
         print(f"  → 업무 {len(tasks)}건 추출")
+        for t in tasks:
+            nxt = occurrences(t.schedule, date - dt.timedelta(days=14), date + dt.timedelta(days=400))
+            print(f"     - [{t.category}] {t.title}  (마감: {nxt[0].isoformat() if nxt else '-'})")
+    return failed
+
+
+def cmd_ingest(args, store: Store) -> int:
+    print(f"LLM: {active().model} @ {active().base_url}")
+
+    docs = find_documents(args.docs)
+    if not docs:
+        print(f"{args.docs} 폴더에 문서가 없습니다. (.docx .pdf .xlsx .csv .txt .md .eml .msg)")
+        return 1
+    removed = store.remove_missing_documents({p.name for p in docs})
+    for name in removed:
+        print(f"- 삭제된 문서의 업무 제거: {name}")
+    todo = []
+    for path in docs:
+        if not args.force and store.is_unchanged(path):
+            print(f"= 변경 없음: {path.name}")
+            continue
+        todo.append(path)
+    failed = _analyze(todo, store, args.date)
     store.save()
     print(f"\n총 {len(store.tasks)}건의 업무가 저장되었습니다: {store.tasks_path}")
     return 1 if failed else 0
+
+
+def cmd_add_mail(args, store: Store) -> int:
+    """메일 파일(.eml/.msg) 또는 붙여넣은 본문(-: 표준 입력, .txt)을 docs/mails/에 저장하고 분석."""
+    from .loaders import check_format
+    from .mail import MAIL_DIRNAME, compose_eml, save_mail
+
+    mail_dir = args.docs / MAIL_DIRNAME
+    sent = dt.datetime.combine(args.sent, dt.time(9)) if args.sent else None
+    targets: list[Path] = []
+    for src in args.files:
+        try:
+            if src == "-":
+                raw, suffix = compose_eml(args.subject, sys.stdin.read(), sent, args.sender), ".eml"
+            else:
+                path = Path(src)
+                suffix = path.suffix.lower()
+                raw = path.read_bytes()
+                if suffix in (".txt", ".md", ""):  # 본문만 복사해 둔 텍스트 파일
+                    text = raw.decode("utf-8-sig", errors="replace")
+                    raw, suffix = compose_eml(args.subject or path.stem, text, sent, args.sender), ".eml"
+                elif suffix not in (".eml", ".msg"):
+                    raise ValueError("메일 파일(.eml, .msg) 또는 본문 텍스트(.txt)만 넣을 수 있습니다.")
+                check_format(f"mail{suffix}", raw)
+            saved, new = save_mail(raw, mail_dir, suffix)
+        except (OSError, ValueError) as e:
+            print(f"! {src}: {e}", file=sys.stderr)
+            return 1
+        print(f"{'+ 저장' if new else '= 이미 있는 메일'}: {saved}")
+        if new or args.force or not store.is_unchanged(saved):
+            targets.append(saved)
+    if not targets:
+        return 0
+    print(f"LLM: {active().model} @ {active().base_url}")
+    return 1 if _analyze(targets, store, args.date) else 0
+
+
+def cmd_fetch_mail(args, store: Store) -> int:
+    """사내 메일 서버(IMAP)에서 인트라넷 메일을 가져와 docs/mails/에 저장하고 분석."""
+    from .mail import MAIL_DIRNAME, IMAPConfig, fetch_imap
+
+    try:
+        cfg = IMAPConfig.from_env(folder=args.folder, sender=args.sender)
+    except ValueError as e:
+        print(f"! {e}", file=sys.stderr)
+        return 1
+    since = args.date - dt.timedelta(days=args.days)
+    filters = [f"보낸 사람 {cfg.sender}"] if cfg.sender else []
+    if args.subject:
+        filters.append(f"제목 '{args.subject}'")
+    print(f"메일 서버: {cfg.user}@{cfg.host} [{cfg.folder}]  {since.isoformat()} 이후" + (f", {', '.join(filters)}" if filters else ""))
+    try:
+        saved, skipped = fetch_imap(cfg, args.docs / MAIL_DIRNAME, since, subject=args.subject)
+    except Exception as e:  # imaplib.IMAP4.error, OSError 등
+        print(f"! 메일을 가져오지 못했습니다: {e}", file=sys.stderr)
+        return 1
+    print(f"새 메일 {len(saved)}통 저장, {skipped}통은 이미 있음")
+    if not saved:
+        return 0
+    print(f"LLM: {active().model} @ {active().base_url}")
+    return 1 if _analyze(saved, store, args.date) else 0
 
 
 def cmd_report(args, store: Store) -> int:
@@ -167,6 +242,21 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument("--docs", type=Path, default=Path("docs"), help="문서 폴더 (기본: docs)")
     ing.add_argument("--force", action="store_true", help="변경 없는 문서도 다시 분석")
 
+    am = sub.add_parser("add-mail", help="인트라넷 메일(.eml/.msg/본문)을 추가하고 바로 분석")
+    am.add_argument("files", nargs="+", help="메일 파일 경로. '-'이면 표준 입력으로 받은 본문")
+    am.add_argument("--docs", type=Path, default=Path("docs"), help="문서 폴더 (메일은 docs/mails에 저장)")
+    am.add_argument("--subject", default="", help="본문만 넣을 때 메일 제목")
+    am.add_argument("--sender", default="", help="본문만 넣을 때 보낸 사람/부서")
+    am.add_argument("--sent", type=_date, default=None, help="본문만 넣을 때 메일 보낸 날짜 (기본: 오늘)")
+    am.add_argument("--force", action="store_true", help="이미 분석한 메일도 다시 분석")
+
+    fm = sub.add_parser("fetch-mail", help="사내 메일 서버(IMAP)에서 인트라넷 메일을 가져와 분석")
+    fm.add_argument("--docs", type=Path, default=Path("docs"), help="문서 폴더 (메일은 docs/mails에 저장)")
+    fm.add_argument("--days", type=int, default=7, help="며칠 전 메일부터 가져올지 (기본: 7)")
+    fm.add_argument("--folder", default=None, help="메일함 (기본: PEOPLE_ALARM_IMAP_FOLDER 또는 INBOX)")
+    fm.add_argument("--from", dest="sender", default=None, help="보낸 사람 필터 (기본: PEOPLE_ALARM_IMAP_FROM)")
+    fm.add_argument("--subject", default="", help="제목에 이 말이 들어간 메일만")
+
     for name in TITLES:
         r = sub.add_parser(name, help=f"{TITLES[name]} 업무 리스트")
         r.add_argument("--save", action="store_true", help="마크다운 파일로 저장")
@@ -198,6 +288,10 @@ def main(argv: list[str] | None = None) -> int:
     store = Store(args.data)
     if args.command == "ingest":
         return cmd_ingest(args, store)
+    if args.command == "add-mail":
+        return cmd_add_mail(args, store)
+    if args.command == "fetch-mail":
+        return cmd_fetch_mail(args, store)
     if args.command == "list":
         return cmd_list(args, store)
     if args.command == "done":

@@ -13,6 +13,7 @@ from typing import Callable
 from .config import active
 from .llm import LLMConnectionError, LLMHTTPError, LLMTimeoutError
 from .loaders import SUPPORTED_SUFFIXES, check_format, find_documents
+from .mail import MAIL_DIRNAME, compose_eml, save_mail
 from .models import Task
 from .store import Store, file_hash
 
@@ -85,9 +86,29 @@ class Analyzer:
         self.submit(name)
         return name
 
+    def save_pasted_mail(self, subject: str, body: str, sent: dt.datetime | None = None, sender: str = "") -> str:
+        """붙여넣은 메일 본문을 docs/mails/에 .eml로 저장하고 분석을 시작한다."""
+        if not body.strip():
+            raise ValueError("메일 본문이 비어 있습니다.")
+        if len(body.encode("utf-8")) > MAX_UPLOAD_BYTES:
+            raise ValueError("메일 본문이 너무 깁니다 (최대 32MB).")
+        path, _ = save_mail(compose_eml(subject, body, sent, sender), self.docs_dir / MAIL_DIRNAME)
+        self.submit(path.name)
+        return path.name
+
+    def _path(self, name: str) -> Path:
+        """문서 이름 → 경로. docs 바로 아래에 없으면 하위 폴더(docs/mails 등)에서 찾는다."""
+        direct = self.docs_dir / name
+        if direct.is_file():
+            return direct
+        if self.docs_dir.exists():
+            for p in find_documents(self.docs_dir):
+                if p.name == name:
+                    return p
+        raise FileNotFoundError(name)
+
     def submit(self, name: str) -> None:
-        if not (self.docs_dir / name).is_file():
-            raise FileNotFoundError(name)
+        self._path(name)  # 없는 문서면 FileNotFoundError
         with self.lock:
             job = self._jobs.get(name)
             if job and job.status in ("queued", "running"):
@@ -108,6 +129,7 @@ class Analyzer:
             stat = path.stat()
             out.append({
                 "name": path.name,
+                "kind": "mail" if path.suffix.lower() in (".eml", ".msg") else "doc",
                 "size": stat.st_size,
                 "modified": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes"),
                 "analyzed": store.is_unchanged(path),
@@ -127,9 +149,9 @@ class Analyzer:
     def _work(self) -> None:
         while True:
             name = self._queue.get()
-            path = self.docs_dir / name
             self._set(name, status="running")
             try:
+                path = self._path(name)
                 digest = file_hash(path)
                 tasks = self.extract(path, self.today())  # 오래 걸리므로 잠금 밖에서
                 with self.lock:

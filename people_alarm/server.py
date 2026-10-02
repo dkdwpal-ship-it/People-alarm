@@ -58,12 +58,12 @@ def make_handler(
                 return None
             return self.rfile.read(length)
 
-        def _read_json(self) -> dict | None:
+        def _read_json(self, limit: int = 64 * 1024) -> dict | None:
             # JSON 요청만 받아 다른 사이트의 단순 form 전송(CSRF)을 막는다.
             if not self.headers.get("Content-Type", "").startswith("application/json"):
                 self._error(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "application/json만 허용됩니다.")
                 return None
-            raw = self._read_body(64 * 1024)
+            raw = self._read_body(limit)
             if raw is None:
                 return None
             try:
@@ -105,6 +105,8 @@ def make_handler(
                 return self._post_upload()
             if path == "/api/analyze":
                 return self._post_analyze()
+            if path == "/api/mail":
+                return self._post_mail()
             self._error(HTTPStatus.NOT_FOUND, "not found")
 
         def _post_done(self):
@@ -149,6 +151,26 @@ def make_handler(
                 analyzer.submit(name)
             except FileNotFoundError:
                 return self._error(HTTPStatus.NOT_FOUND, f"문서를 찾을 수 없습니다: {name}")
+            self._json(HTTPStatus.ACCEPTED, {"name": name})
+
+        def _post_mail(self):
+            # 인트라넷 메일 본문을 붙여넣으면 docs/mails/에 .eml로 저장하고 바로 분석한다.
+            body = self._read_json(limit=2 * 1024 * 1024)
+            if body is None:
+                return
+            sent = None
+            raw_sent = str(body.get("sent") or "").strip()
+            if raw_sent:
+                try:
+                    sent = dt.datetime.fromisoformat(raw_sent)
+                except ValueError:
+                    return self._error(HTTPStatus.BAD_REQUEST, "sent는 YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM 형식이어야 합니다.")
+            try:
+                name = analyzer.save_pasted_mail(
+                    str(body.get("subject") or ""), str(body.get("body") or ""), sent, str(body.get("sender") or "")
+                )
+            except ValueError as e:
+                return self._error(HTTPStatus.BAD_REQUEST, str(e))
             self._json(HTTPStatus.ACCEPTED, {"name": name})
 
         def log_message(self, fmt, *args):  # 요청 로그는 조용히

@@ -1,12 +1,14 @@
 # People-alarm
 
-업무 문서(Word·PDF·엑셀 등)를 읽어 **"언제 무엇을 해야 하는지"** 를 뽑아내고,
+업무 문서(Word·PDF·엑셀 등)와 **사내 인트라넷(그룹웨어) 메일**을 읽어 **"언제 무엇을 해야 하는지"** 를 뽑아내고,
 오늘 / 이번 주 / 이번 달 / 다음 달에 해야 할 업무 리스트를 자동으로 알려주는 agent입니다.
 
 ## 동작 방식
 
 ```
-docs/ 업무 문서 ──(1) ingest: 사내 LLM이 문서 분석──▶ data/tasks.json (업무 + 반복 규칙)
+docs/ 업무 문서 ─┐
+인트라넷 메일 ────┴(1) 사내 LLM이 분석──▶ data/tasks.json (업무 + 반복 규칙/마감일)
+ (.eml/.msg, 붙여넣기, IMAP)
                                                         │
                            (2) today/week/month: 날짜 계산(LLM 호출 없음)
                                                         ▼
@@ -23,6 +25,57 @@ docs/ 업무 문서 ──(1) ingest: 사내 LLM이 문서 분석──▶ data/
    - 🔜 마감은 나중이지만 지금 준비를 시작해야 하는 업무
    - ⚠️ 최근 2주 안에 마감이 지났는데 완료 처리되지 않은 업무
 
+## 인트라넷 메일로 업무 일정 관리
+
+그룹웨어에서 오는 공지·요청 메일("이번 주 금요일까지 제출", "수강 기간 10/12~10/30", "매월 5일까지 제출")을
+넣으면 마감일·행사일을 뽑아 오늘 / 이번 주 / 이번 달 / 다음 달 업무 리스트와 달력에 넣습니다.
+
+- **기준일은 메일을 보낸 날짜**입니다. "이번 주 금요일", "다음 달 말", 연도 없는 "10/15(수)"를 보낸 날 기준 실제 날짜로 바꿉니다.
+  (일주일 전에 온 메일을 오늘 넣어도 날짜가 밀리지 않습니다.)
+- 신청·수강 기간은 끝 날짜가 마감, 시작일부터 준비(🔜) 목록에 뜹니다. 마감 연장 메일은 바뀐 날짜를 씁니다.
+- HTML 메일의 표도 읽고, 첨부된 Word·PDF·엑셀·텍스트 파일 내용도 함께 분석합니다.
+- 메일은 `docs/mails/`에 `20261005-0930_[인사팀] 연말정산 안내_1a2b3c.eml` 같은 이름으로 저장되고,
+  같은 메일(Message-ID 기준)은 두 번 저장·분석되지 않습니다.
+- 분석은 문서와 똑같이 사내 vLLM 서버(`thinkingcap`, API 키 없음)로만 보냅니다.
+
+메일을 넣는 방법은 네 가지입니다.
+
+**1) 대시보드에 끌어다 놓기** — `people-alarm serve` 화면의 **업무 문서 · 메일** 칸에 `.eml`(그룹웨어 "EML로 저장"/"원본 저장")
+이나 `.msg`(Outlook에서 메일을 바탕화면으로 끌어 저장) 파일을 놓으면 바로 분석합니다.
+
+**2) 본문 붙여넣기** — 대시보드의 **메일 붙여넣기** 버튼 → 제목·보낸 부서·보낸 날짜·본문을 넣고 **저장하고 분석**.
+
+**3) 명령줄**
+
+```bash
+people-alarm add-mail 받은메일.eml 공지.msg                     # 파일 추가 + 바로 분석
+pbpaste | people-alarm add-mail - --subject "[총무팀] 사무실 이전" --sent 2026-10-05   # 본문만 붙여넣기
+people-alarm add-mail 본문.txt --subject "주간회의 안내" --sender 기획팀
+```
+
+**4) 메일함에서 자동으로 가져오기 (IMAP)** — 인트라넷 알림 메일을 전용 메일함(또는 폴더)으로 자동 전달하는
+규칙을 만들어 두고, 그 메일함을 주기적으로 읽습니다. 메일을 읽음 처리하지 않고(읽기 전용) 새 메일만 저장·분석합니다.
+
+```bash
+export PEOPLE_ALARM_IMAP_HOST=mail.company.co.kr
+export PEOPLE_ALARM_IMAP_USER=hong.gildong
+export PEOPLE_ALARM_IMAP_PASSWORD='…'                     # 저장소·스크립트에 적지 말고 환경 변수로만
+export PEOPLE_ALARM_IMAP_FROM=noreply@intranet.company.co.kr  # 인트라넷 발신 주소만 (선택)
+people-alarm fetch-mail                     # 최근 7일 메일
+people-alarm fetch-mail --days 30 --folder "인트라넷" --subject "[인사팀]"
+```
+
+| 환경 변수 | 기본값 | 설명 |
+|---|---|---|
+| `PEOPLE_ALARM_IMAP_HOST` | (필수) | 사내 메일 서버 주소 |
+| `PEOPLE_ALARM_IMAP_USER` / `PEOPLE_ALARM_IMAP_PASSWORD` | (필수) | 메일 계정 |
+| `PEOPLE_ALARM_IMAP_PORT` | 993 (SSL) / 143 | |
+| `PEOPLE_ALARM_IMAP_SSL` | 1 | 0이면 암호화하지 않은 IMAP |
+| `PEOPLE_ALARM_IMAP_FOLDER` | INBOX | `--folder` |
+| `PEOPLE_ALARM_IMAP_FROM` | (없음) | 보낸 사람 필터, `--from` |
+
+샘플 메일: `examples/mails/인사팀_연말정산_교육_안내_샘플.eml`
+
 ## 웹 대시보드
 
 ```bash
@@ -37,7 +90,7 @@ people-alarm export-html            # reports/dashboard.html 파일 하나로 �
 - **전체 업무**: 반복 규칙, 준비 기간, 다음 마감일, 출처 문서를 검색할 수 있는 표.
 - 분류 칩으로 급여·세무 등 원하는 분류만 볼 수 있고, 기준일을 바꿔 과거·미래 시점도 볼 수 있습니다.
 
-- **업무 문서** (`serve`에서만): 문서를 끌어다 놓거나 **문서 올리기** 버튼으로 올리면 `docs/`에 저장되고
+- **업무 문서 · 메일** (`serve`에서만): 문서·메일을 끌어다 놓거나 **문서·메일 올리기** 버튼으로 올리면 `docs/`에 저장되고
   바로 분석이 시작됩니다. 한 건씩 차례로 분석하며, 끝나면 업무 리스트·달력이 새로고침 없이 갱신됩니다.
   문서마다 분석 상태(대기 중 / 분석 중 / 업무 n건 / 분석 실패)와 **다시 분석** 버튼이 있습니다.
   같은 이름으로 다시 올리면 그 문서의 업무가 새 분석 결과로 바뀝니다.
@@ -87,7 +140,7 @@ people-alarm --llm-model other-model ingest              # 일회성으로 다�
 ```bash
 # 1) docs/ 폴더에 업무 문서를 넣고 분석
 people-alarm ingest                 # 변경된 문서만 분석
-people-alarm ingest --force         # 전부 다시 분석
+people-alarm ingest --force         # 전부 다시 분석 (docs/mails/의 메일 포함)
 
 # 2) 업무 리스트 보기
 people-alarm today
@@ -130,7 +183,7 @@ python -m people_alarm --data examples/data --date 2026-09-30 week
 매일 아침 자동 실행하려면 cron에 등록하세요.
 
 ```cron
-50 8 * * 1-5  cd /path/to/People-alarm && people-alarm today --save
+50 8 * * 1-5  cd /path/to/People-alarm && people-alarm fetch-mail; people-alarm today --save
 ```
 
 ## 문제 해결
@@ -143,7 +196,7 @@ python -m people_alarm --data examples/data --date 2026-09-30 week
 git pull
 pip uninstall -y people-alarm
 pip install -e .            # -e를 꼭 붙이세요 (붙이지 않으면 코드가 복사되어 git pull이 반영되지 않음)
-people-alarm --version      # people-alarm 0.3.0 (코드 위치: …/People-alarm/people_alarm) 이 나오면 정상
+people-alarm --version      # people-alarm 0.4.0 (코드 위치: …/People-alarm/people_alarm) 이 나오면 정상
 people-alarm serve
 ```
 
@@ -153,7 +206,8 @@ people-alarm serve
 
 ```
 people_alarm/
-  loaders.py    문서 → 텍스트 추출 (docx, pdf, xlsx, csv, txt, md) + 파일 형식 검사
+  loaders.py    문서 → 텍스트 추출 (docx, pdf, xlsx, csv, txt, md, eml, msg) + 파일 형식 검사
+  mail.py       인트라넷 메일 해석(.eml/.msg/HTML·첨부), 저장, 붙여넣기, IMAP 가져오기
   config.py     사내 LLM 연결 설정
   extractor.py  사내 LLM으로 업무 추출 (조각 나누기, JSON 해석·재시도)
   models.py     Task / Schedule 데이터 모델
@@ -172,4 +226,5 @@ tests/          pytest 테스트
 
 - HWP 파일은 직접 읽지 못합니다. 한글에서 PDF나 DOCX로 저장해 넣어 주세요.
 - PDF는 글자 정보가 있어야 합니다. 스캔한 이미지 PDF는 원본 파일이나 OCR 처리한 PDF를 쓰세요.
-- 문서 내용은 사내 LLM 서버로만 전송되고 외부로 나가지 않습니다. `docs/`, `data/`, `reports/`는 git에서 제외됩니다.
+- 메일 첨부 중 HWP 등 읽을 수 없는 형식은 이름만 표시하고 건너뜁니다.
+- 문서·메일 내용은 사내 LLM 서버로만 전송되고 외부로 나가지 않습니다. `docs/`, `data/`, `reports/`는 git에서 제외됩니다.

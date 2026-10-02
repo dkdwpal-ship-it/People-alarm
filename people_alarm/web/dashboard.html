@@ -224,6 +224,18 @@ blockquote { margin: 0; padding-left: 10px; border-left: 2px solid var(--line); 
 .doc-meta { font-size: 12px; color: var(--muted); font-family: var(--font-data); }
 .doc-side { display: flex; align-items: center; gap: 8px; justify-content: end; flex-wrap: wrap; }
 .doc-error { grid-column: 1 / -1; font-size: 12.5px; color: var(--crit); }
+.doc-kind { font-size: 11px; font-weight: 600; color: var(--accent); margin-right: 6px; }
+.drop-side { display: grid; gap: 8px; }
+dialog.mail { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--fg); padding: 18px; width: min(640px, calc(100vw - 32px)); }
+dialog.mail::backdrop { background: rgb(0 0 0 / .35); }
+dialog.mail form { display: grid; gap: 10px; }
+dialog.mail h2 { margin: 0; font-size: 17px; }
+dialog.mail p { margin: 0; font-size: 13px; color: var(--muted); }
+dialog.mail .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+dialog.mail label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+dialog.mail input, dialog.mail textarea { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--surface); color: var(--fg); font: inherit; font-size: 14px; }
+dialog.mail textarea { min-height: 220px; resize: vertical; }
+dialog.mail .actions { display: flex; justify-content: end; gap: 8px; }
 .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block; animation: spin .8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -267,7 +279,8 @@ tbody tr:hover { background: var(--surface-2); }
         <input type="date" id="date-input">
       </div>
       <button class="btn" id="today-btn" type="button">오늘로</button>
-      <button class="btn primary" id="upload-btn" type="button" hidden>문서 올리기</button>
+      <button class="btn" id="mail-btn" type="button" hidden>메일 붙여넣기</button>
+      <button class="btn primary" id="upload-btn" type="button" hidden>문서·메일 올리기</button>
     </div>
   </header>
 
@@ -310,19 +323,40 @@ tbody tr:hover { background: var(--surface-2); }
 
   <section class="panel" id="docs-panel" aria-labelledby="docs-title">
     <div class="panel-head">
-      <h2 id="docs-title">업무 문서</h2>
+      <h2 id="docs-title">업무 문서 · 메일</h2>
       <span class="meta" id="docs-meta"></span>
     </div>
     <div class="docs">
-      <label class="drop" id="drop" for="file-input">
-        <strong>문서를 끌어다 놓거나 눌러서 선택</strong>
-        <span>올리면 바로 분석해서 업무 리스트에 추가합니다</span>
-        <small>Word(.docx) · PDF · 엑셀(.xlsx, .csv) · 텍스트(.txt, .md) · 최대 32MB</small>
-      </label>
-      <input type="file" id="file-input" multiple accept=".docx,.pdf,.xlsx,.xlsm,.csv,.txt,.md" hidden>
+      <div class="drop-side">
+        <label class="drop" id="drop" for="file-input">
+          <strong>문서·메일을 끌어다 놓거나 눌러서 선택</strong>
+          <span>올리면 바로 분석해서 업무 리스트에 추가합니다</span>
+          <small>Word(.docx) · PDF · 엑셀(.xlsx, .csv) · 텍스트(.txt, .md) · 메일(.eml, .msg) · 최대 32MB</small>
+          <small>메일은 보낸 날짜를 기준으로 "이번 주 금요일까지" 같은 마감일을 계산합니다</small>
+        </label>
+        <button class="btn" id="mail-btn-2" type="button" hidden>인트라넷 메일 본문 붙여넣기</button>
+      </div>
+      <input type="file" id="file-input" multiple accept=".docx,.pdf,.xlsx,.xlsm,.csv,.txt,.md,.eml,.msg" hidden>
       <div class="group" id="doc-list-wrap"></div>
     </div>
   </section>
+
+  <dialog class="mail" id="mail-dialog" aria-labelledby="mail-dialog-title">
+    <form id="mail-form" method="dialog">
+      <h2 id="mail-dialog-title">인트라넷 메일 붙여넣기</h2>
+      <p>그룹웨어 메일의 본문을 복사해 붙여넣으세요. 보낸 날짜를 기준으로 마감일·행사일을 뽑아 업무 달력에 넣습니다.</p>
+      <div class="row">
+        <label>제목<input id="mail-subject" type="text" placeholder="[인사팀] 연말정산 서류 제출 안내"></label>
+        <label>보낸 사람/부서<input id="mail-sender" type="text" placeholder="인사팀"></label>
+        <label>보낸 날짜<input id="mail-sent" type="date"></label>
+      </div>
+      <label>본문<textarea id="mail-body" required placeholder="메일 본문을 붙여넣으세요"></textarea></label>
+      <div class="actions">
+        <button class="btn" type="button" id="mail-cancel">취소</button>
+        <button class="btn primary" type="submit">저장하고 분석</button>
+      </div>
+    </form>
+  </dialog>
 
   <section class="panel" aria-labelledby="catalog-title">
     <div class="panel-head">
@@ -647,7 +681,7 @@ tbody tr:hover { background: var(--surface-2); }
   chartEl.addEventListener("pointerleave", () => { const tip = $("tip"); if (tip) tip.hidden = true; });
 
   // ---- 문서 업로드·분석 (serve 모드) ----
-  const ALLOWED = [".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md"];
+  const ALLOWED = [".docx", ".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".md", ".eml", ".msg"];
   const MAX_BYTES = 32 * 1024 * 1024;
   let docs = [];
   let llm = null;
@@ -683,11 +717,11 @@ tbody tr:hover { background: var(--surface-2); }
     $("docs-meta").textContent = parts.join(" · ");
     wrap.innerHTML = docs.length
       ? `<ul class="doc-list">${docs.map((d) => `<li class="doc">
-          <div><div class="doc-name">${esc(d.name)}</div><div class="doc-meta">${sizeText(d.size)} · ${d.modified.replace("T", " ")}</div></div>
+          <div><div class="doc-name">${d.kind === "mail" ? `<span class="doc-kind">메일</span>` : ""}${esc(d.name)}</div><div class="doc-meta">${sizeText(d.size)} · ${d.modified.replace("T", " ")}</div></div>
           <div class="doc-side">${docStatus(d)}</div>
           ${d.job && d.job.status === "error" ? `<div class="doc-error">${esc(d.job.error)}</div>` : ""}
         </li>`).join("")}</ul>`
-      : `<div class="empty">아직 올린 문서가 없습니다. 왼쪽에 문서를 끌어다 놓으세요.</div>`;
+      : `<div class="empty">아직 올린 문서가 없습니다. 왼쪽에 문서나 메일(.eml, .msg)을 끌어다 놓거나 메일 본문을 붙여넣으세요.</div>`;
   }
 
   async function refreshData() {
@@ -747,8 +781,30 @@ tbody tr:hover { background: var(--surface-2); }
     loadDocs();
   }
 
+  async function submitMail(e) {
+    e.preventDefault();
+    const payload = { subject: $("mail-subject").value, sender: $("mail-sender").value, sent: $("mail-sent").value, body: $("mail-body").value };
+    if (!payload.body.trim()) { notify("메일 본문을 붙여넣으세요.", "error"); return; }
+    try {
+      const res = await fetch("api/mail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      jobSeen[body.name] = "queued";
+      $("mail-dialog").close();
+      $("mail-form").reset();
+      notify(`메일을 저장하고 분석을 시작했습니다: ${body.name}`);
+    } catch (err) { notify(`메일을 저장하지 못했습니다: ${err.message}`, "error"); }
+    loadDocs();
+  }
+
   if (data.mode === "server") {
     $("upload-btn").hidden = false;
+    for (const id of ["mail-btn", "mail-btn-2"]) {
+      $(id).hidden = false;
+      $(id).addEventListener("click", () => { if (!$("mail-sent").value) $("mail-sent").value = S.today; $("mail-dialog").showModal(); });
+    }
+    $("mail-cancel").addEventListener("click", () => $("mail-dialog").close());
+    $("mail-form").addEventListener("submit", submitMail);
     $("upload-btn").addEventListener("click", () => $("file-input").click());
     $("file-input").addEventListener("change", (e) => { uploadFiles([...e.target.files]); e.target.value = ""; });
     const drop = $("drop");
@@ -764,7 +820,7 @@ tbody tr:hover { background: var(--surface-2); }
   renderDocs();
   if (!data.tasks.length) {
     $("groups").innerHTML = data.mode === "server"
-      ? `<div class="empty">아직 업무가 없습니다. 아래 <b>업무 문서</b>에 문서를 올리면 분석해서 채워 넣습니다.</div>`
+      ? `<div class="empty">아직 업무가 없습니다. 아래 <b>업무 문서 · 메일</b>에 문서나 인트라넷 메일을 올리면 분석해서 채워 넣습니다.</div>`
       : `<div class="empty">아직 업무가 없습니다. docs/ 폴더에 업무 문서를 넣고 <code>people-alarm ingest</code>를 실행하세요.</div>`;
   }
 })();
