@@ -224,13 +224,31 @@ blockquote { margin: 0; padding-left: 10px; border-left: 2px solid var(--line); 
 .doc-meta { font-size: 12px; color: var(--muted); font-family: var(--font-data); }
 .doc-side { display: flex; align-items: center; gap: 8px; justify-content: end; flex-wrap: wrap; }
 .doc-error { grid-column: 1 / -1; font-size: 12.5px; color: var(--crit); }
+.doc.excluded { background: var(--surface-2); }
+.doc.excluded .doc-name { color: var(--muted); }
+.btn.danger { color: var(--crit); }
+.btn.danger.armed { background: var(--crit); border-color: var(--crit); color: var(--surface); }
+.btn.link { border-color: transparent; background: transparent; color: var(--accent); padding-inline: 6px; }
+.btn.link:hover { background: var(--accent-soft); }
 .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block; animation: spin .8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- catalog ---- */
 .search { flex: 1 1 220px; max-width: 320px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--surface); }
 .table-wrap { overflow-x: auto; }
-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+table { width: 100%; min-width: 1040px; border-collapse: collapse; font-size: 13px; }
+details.catalog > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+details.catalog > summary::-webkit-details-marker { display: none; }
+details.catalog > summary h2 { font-size: 16px; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; }
+details.catalog > summary h2::before { content: "▸"; color: var(--muted); font-size: 12px; transition: transform .15s; }
+details.catalog[open] > summary h2::before { transform: rotate(90deg); }
+details.catalog[open] > summary { margin-bottom: 14px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.toolbar select { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--surface); max-width: 100%; }
+.toolbar label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-2); cursor: pointer; }
+tr.excluded td { color: var(--muted); }
+#catalog td:nth-child(2), #catalog td:nth-child(4), #catalog td:nth-child(6) { white-space: nowrap; }
+td .evidence { font-size: 12px; color: var(--fg-2); border-left: 2px solid var(--line); padding-left: 8px; max-width: 26em; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); white-space: nowrap; }
 td.num, th.num { text-align: right; font-family: var(--font-data); font-variant-numeric: tabular-nums; }
@@ -324,17 +342,24 @@ tbody tr:hover { background: var(--surface-2); }
     </div>
   </section>
 
-  <section class="panel" aria-labelledby="catalog-title">
-    <div class="panel-head">
-      <h2 id="catalog-title">전체 업무</h2>
-      <input class="search" id="search" type="search" placeholder="업무명, 분류, 출처 검색" aria-label="전체 업무 검색">
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>업무</th><th>분류</th><th>반복 규칙</th><th class="num">준비</th><th>다음 마감</th><th>출처</th></tr></thead>
-        <tbody id="catalog"></tbody>
-      </table>
-    </div>
+  <section class="panel" id="catalog-panel">
+    <details class="catalog" id="catalog-details">
+      <summary>
+        <h2 id="catalog-title">분석 결과 전체</h2>
+        <span class="meta" id="catalog-meta"></span>
+      </summary>
+      <div class="toolbar">
+        <input class="search" id="search" type="search" placeholder="업무명, 분류, 담당, 근거 검색" aria-label="분석 결과 검색">
+        <select id="catalog-doc" aria-label="문서 선택"></select>
+        <label class="inline" for="include-excluded"><input type="checkbox" id="include-excluded"> 제외한 문서의 업무도 보기</label>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>업무</th><th>분류</th><th>반복 규칙</th><th class="num">준비</th><th>다음 마감</th><th>담당</th><th>근거 문장</th><th>출처 문서</th></tr></thead>
+          <tbody id="catalog"></tbody>
+        </table>
+      </div>
+    </details>
   </section>
 </div>
 
@@ -368,7 +393,7 @@ tbody tr:hover { background: var(--surface-2); }
 
   // ---- 상태 ----
   let data = JSON.parse($("pa-data").textContent);
-  const S = { today: data.today, period: "week", calMonth: monthStart(data.today), selectedDay: null, hidden: new Set(), query: "" };
+  const S = { today: data.today, period: "week", calMonth: monthStart(data.today), selectedDay: null, hidden: new Set(), query: "", catalogDoc: "", includeExcluded: false };
   const STORE_KEY = "people-alarm:" + (data.label || "static");
   const store = {
     get(k, fb) { try { const v = localStorage.getItem(STORE_KEY + ":" + k); return v == null ? fb : JSON.parse(v); } catch { return fb; } },
@@ -547,18 +572,45 @@ tbody tr:hover { background: var(--surface-2); }
     const q = S.query.trim().toLowerCase();
     const next = {};
     for (const o of data.occurrences) if (o.due >= S.today && !next[o.taskId]) next[o.taskId] = o.due;
-    const rows = data.tasks
+    const excludedDocs = new Set(data.excludedDocuments || []);
+    const all = data.tasks.concat((data.excludedTasks || []).filter((t) => S.includeExcluded || t.source === S.catalogDoc));
+    // 문서 선택 목록: 일정에 쓰는 문서 + 제외한 문서
+    const sources = [...new Set(data.tasks.map((t) => t.source).concat((data.excludedTasks || []).map((t) => t.source)))].sort((a, b) => a.localeCompare(b, "ko"));
+    if (S.catalogDoc && !sources.includes(S.catalogDoc)) S.catalogDoc = "";
+    $("catalog-doc").innerHTML = `<option value="">모든 문서 (${sources.length}개)</option>` +
+      sources.map((src) => `<option value="${esc(src)}" ${src === S.catalogDoc ? "selected" : ""}>${esc(src)}${excludedDocs.has(src) ? " (제외됨)" : ""}</option>`).join("");
+    $("include-excluded").checked = S.includeExcluded;
+    const rows = all
+      .filter((t) => !S.catalogDoc || t.source === S.catalogDoc)
       .filter((t) => !S.hidden.has(t.category))
-      .filter((t) => !q || [t.title, t.category, t.source, t.owner, t.description].join(" ").toLowerCase().includes(q))
-      .sort((a, b) => (next[a.id] || "9999").localeCompare(next[b.id] || "9999"));
-    $("catalog").innerHTML = rows.length ? rows.map((t) => `<tr>
+      .filter((t) => !q || [t.title, t.category, t.source, t.owner, t.description, t.evidence, t.rule].join(" ").toLowerCase().includes(q))
+      .sort((a, b) => (next[a.id] || "9999").localeCompare(next[b.id] || "9999") || a.title.localeCompare(b.title, "ko"));
+    const total = data.tasks.length + (data.excludedTasks || []).length;
+    $("catalog-meta").textContent = `분석된 업무 ${total}건${excludedDocs.size ? ` · 제외 ${(data.excludedTasks || []).length}건` : ""} · 지금 ${rows.length}건 표시`;
+    $("catalog").innerHTML = rows.length ? rows.map((t) => {
+      const ex = excludedDocs.has(t.source);
+      const nextCell = ex ? `<span class="pill" data-tone="warn">제외됨</span>` : next[t.id] ? `${fmt(next[t.id])} <span class="pill">${dday(next[t.id], S.today)}</span>` : "-";
+      return `<tr class="${ex ? "excluded" : ""}">
       <td><b>${esc(t.title)}</b><div class="src">${esc(t.description)}</div></td>
       <td><span class="tag">${dot(t.category)}${esc(t.category)}</span></td>
       <td>${esc(t.rule)}</td>
       <td class="num">${t.leadDays}일 전</td>
-      <td class="mono">${next[t.id] ? `${fmt(next[t.id])} <span class="pill">${dday(next[t.id], S.today)}</span>` : "-"}</td>
-      <td class="src">${esc(t.source)}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="src">조건에 맞는 업무가 없습니다.</td></tr>`;
+      <td class="mono">${nextCell}</td>
+      <td>${esc(t.owner || "-")}</td>
+      <td><div class="evidence">${esc(t.evidence)}</div></td>
+      <td class="src">${esc(t.source)}</td></tr>`;
+    }).join("")
+      : `<tr><td colspan="8" class="src">조건에 맞는 업무가 없습니다.${!S.includeExcluded && excludedDocs.size ? " 제외한 문서의 업무는 위의 체크박스를 켜면 보입니다." : ""}</td></tr>`;
+  }
+
+  function showResults(source) {
+    // 특정 문서의 분석 결과를 펼쳐서 보여준다 (제외한 문서도).
+    S.catalogDoc = source;
+    if ((data.excludedDocuments || []).includes(source)) S.includeExcluded = true;
+    S.query = ""; $("search").value = "";
+    $("catalog-details").open = true;
+    renderCatalog();
+    $("catalog-panel").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function renderAll() {
@@ -633,6 +685,11 @@ tbody tr:hover { background: var(--surface-2); }
     if (e.target.closest("#today-btn")) setToday(new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10));
   });
   $("search").addEventListener("input", (e) => { S.query = e.target.value; renderCatalog(); });
+  $("catalog-doc").addEventListener("change", (e) => { S.catalogDoc = e.target.value; renderCatalog(); });
+  $("include-excluded").addEventListener("change", (e) => { S.includeExcluded = e.target.checked; renderCatalog(); });
+  $("catalog-details").open = store.get("catalogOpen", false);
+  $("catalog-details").addEventListener("toggle", (e) => store.set("catalogOpen", e.target.open));
+  document.addEventListener("click", (e) => { const b = e.target.closest("[data-results]"); if (b) showResults(b.dataset.results); });
 
   const chartEl = $("chart");
   chartEl.addEventListener("pointermove", (e) => {
@@ -662,8 +719,27 @@ tbody tr:hover { background: var(--surface-2); }
     if (j && j.status === "queued") return `<span class="pill">대기 중</span>`;
     if (j && j.status === "running") return `<span class="pill" data-tone="accent"><span class="spin"></span> 분석 중</span>`;
     if (j && j.status === "error") return `<span class="pill" data-tone="crit">분석 실패</span><button class="btn small" type="button" data-analyze="${esc(d.name)}">다시 시도</button>`;
+    if (d.excluded) return `<span class="pill" data-tone="warn">제외됨 · 업무 ${d.taskCount}건</span>`;
     if (d.analyzed) return `<span class="pill" data-tone="good">업무 ${d.taskCount}건</span><button class="btn small" type="button" data-analyze="${esc(d.name)}">다시 분석</button>`;
     return `<span class="pill" data-tone="warn">분석 전</span><button class="btn small" type="button" data-analyze="${esc(d.name)}">분석</button>`;
+  }
+
+  let armedDelete = null; // 삭제 확인 대기 중인 문서
+
+  function docActions(d) {
+    const n = esc(d.name);
+    const busy = d.job && (d.job.status === "queued" || d.job.status === "running");
+    const out = [];
+    if (d.taskCount) out.push(`<button class="btn small link" type="button" data-results="${n}">결과 보기</button>`);
+    if (!busy) {
+      out.push(d.excluded
+        ? `<button class="btn small" type="button" data-exclude="${n}" data-value="0">일정에 다시 넣기</button>`
+        : `<button class="btn small" type="button" data-exclude="${n}" data-value="1">제외</button>`);
+      out.push(armedDelete === d.name
+        ? `<button class="btn small danger armed" type="button" data-delete="${n}">삭제 확인</button><button class="btn small" type="button" data-delete-cancel>취소</button>`
+        : `<button class="btn small danger" type="button" data-delete="${n}">삭제</button>`);
+    }
+    return out.join("");
   }
 
   function renderDocs() {
@@ -678,13 +754,15 @@ tbody tr:hover { background: var(--surface-2); }
     const parts = [];
     if (docs.length) parts.push(`문서 ${docs.length}개`);
     if (analyzing) parts.push(`분석 중 ${analyzing}개`);
+    const excludedCount = docs.filter((d) => d.excluded).length;
+    if (excludedCount) parts.push(`제외 ${excludedCount}개`);
     if (llm) parts.push(`분석 모델 ${llm.model}`);
     if (appVersion) parts.push(`v${appVersion}`);
     $("docs-meta").textContent = parts.join(" · ");
     wrap.innerHTML = docs.length
-      ? `<ul class="doc-list">${docs.map((d) => `<li class="doc">
+      ? `<ul class="doc-list">${docs.map((d) => `<li class="doc${d.excluded ? " excluded" : ""}">
           <div><div class="doc-name">${esc(d.name)}</div><div class="doc-meta">${sizeText(d.size)} · ${d.modified.replace("T", " ")}</div></div>
-          <div class="doc-side">${docStatus(d)}</div>
+          <div class="doc-side">${docStatus(d)}${docActions(d)}</div>
           ${d.job && d.job.status === "error" ? `<div class="doc-error">${esc(d.job.error)}</div>` : ""}
         </li>`).join("")}</ul>`
       : `<div class="empty">아직 올린 문서가 없습니다. 왼쪽에 문서를 끌어다 놓으세요.</div>`;
@@ -736,6 +814,30 @@ tbody tr:hover { background: var(--surface-2); }
     }
   }
 
+  async function postJson(url, body) {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || res.statusText);
+    return out;
+  }
+
+  async function setExcluded(name, excluded) {
+    try {
+      await postJson("api/documents/exclude", { name, excluded });
+      notify(excluded ? `${name}을(를) 일정에서 뺐습니다. 분석 결과는 '분석 결과 전체'에서 볼 수 있습니다.` : `${name}을(를) 일정에 다시 넣었습니다.`);
+      await refreshData(); await loadDocs();
+    } catch (e) { notify(`변경하지 못했습니다: ${e.message}`, "error"); }
+  }
+
+  async function deleteDoc(name) {
+    armedDelete = null;
+    try {
+      const out = await postJson("api/documents/delete", { name });
+      notify(`${name}을(를) 삭제했습니다 (업무 ${out.removedTasks}건 함께 삭제).`);
+      await refreshData(); await loadDocs();
+    } catch (e) { notify(`삭제하지 못했습니다: ${e.message}`, "error"); renderDocs(); }
+  }
+
   async function analyze(name) {
     try {
       const res = await fetch("api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
@@ -755,7 +857,17 @@ tbody tr:hover { background: var(--surface-2); }
     ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); }));
     ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
     drop.addEventListener("drop", (e) => { e.preventDefault(); uploadFiles([...e.dataTransfer.files]); });
-    document.addEventListener("click", (e) => { const b = e.target.closest("[data-analyze]"); if (b) analyze(b.dataset.analyze); });
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-analyze], [data-exclude], [data-delete], [data-delete-cancel]");
+      if (!b) return;
+      if (b.dataset.analyze) analyze(b.dataset.analyze);
+      else if (b.dataset.exclude) setExcluded(b.dataset.exclude, b.dataset.value === "1");
+      else if ("deleteCancel" in b.dataset) { armedDelete = null; renderDocs(); }
+      else if (b.dataset.delete) {
+        if (armedDelete === b.dataset.delete) deleteDoc(b.dataset.delete);
+        else { armedDelete = b.dataset.delete; renderDocs(); }
+      }
+    });
     loadDocs();
   }
 

@@ -7,6 +7,9 @@
   people-alarm serve [--port 8000]   # 웹 대시보드
   people-alarm export-html           # 대시보드를 HTML 파일 하나로 저장
   people-alarm check-llm             # 사내 LLM 서버 연결 확인
+  people-alarm docs                  # 등록된 문서와 제외 여부
+  people-alarm exclude|include <문서>  # 문서를 일정에서 빼기 / 다시 넣기
+  people-alarm list --all            # 제외한 문서까지 분석 결과 전체 보기
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from pathlib import Path
 from .config import LLMConfig, active, make_client, set_active
 from .loaders import find_documents
 from .report import TITLES, build_report, render_markdown
-from .schedule import occurrences
+from .schedule import describe, occurrences
 from .store import Store
 
 
@@ -50,6 +53,9 @@ def cmd_ingest(args, store: Store) -> int:
         print(f"- 삭제된 문서의 업무 제거: {name}")
     failed = 0
     for path in docs:
+        if store.is_excluded(path.name):
+            print(f"- 제외된 문서라 건너뜀: {path.name}  (다시 넣으려면 people-alarm include \"{path.name}\")")
+            continue
         if not args.force and store.is_unchanged(path):
             print(f"= 변경 없음: {path.name}")
             continue
@@ -83,11 +89,52 @@ def cmd_report(args, store: Store) -> int:
 
 
 def cmd_list(args, store: Store) -> int:
-    for t in sorted(store.tasks, key=lambda t: (t.category, t.title)):
+    tasks = store.all_tasks if args.all else store.tasks
+    if args.doc:
+        tasks = [t for t in tasks if t.source == args.doc]
+    if not tasks:
+        print("해당하는 업무가 없습니다.")
+        return 0
+    excluded = store.excluded_documents
+    for t in sorted(tasks, key=lambda t: (t.source, t.category, t.title)):
         s = t.schedule
         nxt = occurrences(s, args.date, args.date + dt.timedelta(days=400))
         nxt_s = nxt[0].isoformat() if nxt else "-"
-        print(f"{t.id}  [{t.category}] {t.title}  ({s.frequency}, 다음: {nxt_s}, {t.lead_days}일 전 준비)  ← {t.source}")
+        mark = "  [제외됨]" if t.source in excluded else ""
+        print(f"{t.id}  [{t.category}] {t.title}  ({describe(s)}, 다음: {nxt_s}, {t.lead_days}일 전 준비)  ← {t.source}{mark}")
+        if args.verbose:
+            print(f"            할 일: {t.description}")
+            if t.owner:
+                print(f"            담당: {t.owner}")
+            print(f"            근거: \"{t.evidence}\"")
+    return 0
+
+
+def cmd_docs(args, store: Store) -> int:
+    counts: dict[str, int] = {}
+    for t in store.all_tasks:
+        counts[t.source] = counts.get(t.source, 0) + 1
+    on_disk = {p.name for p in find_documents(args.docs)} if args.docs.exists() else set()
+    names = sorted(set(store._data["documents"]) | on_disk)
+    if not names:
+        print("등록된 문서가 없습니다.")
+        return 0
+    for name in names:
+        state = "제외됨" if store.is_excluded(name) else ("분석됨" if name in store._data["documents"] else "분석 전")
+        print(f"[{state}] {name}  (업무 {counts.get(name, 0)}건)")
+    return 0
+
+
+def cmd_exclude(args, store: Store) -> int:
+    exclude = args.command == "exclude"
+    known = set(store._data["documents"]) | ({p.name for p in find_documents(args.docs)} if args.docs.exists() else set())
+    if args.name not in known:
+        print(f"문서를 찾을 수 없습니다: {args.name}  (people-alarm docs로 이름을 확인하세요)")
+        return 1
+    store.set_excluded(args.name, exclude)
+    store.save()
+    n = sum(1 for t in store.all_tasks if t.source == args.name)
+    print(f"{'일정에서 뺐습니다' if exclude else '일정에 다시 넣었습니다'}: {args.name} (업무 {n}건)")
     return 0
 
 
@@ -172,7 +219,17 @@ def build_parser() -> argparse.ArgumentParser:
         r.add_argument("--save", action="store_true", help="마크다운 파일로 저장")
         r.add_argument("--out", type=Path, default=Path("reports"), help="저장 폴더 (기본: reports)")
 
-    sub.add_parser("list", help="추출된 전체 업무 보기")
+    ls = sub.add_parser("list", help="추출된 전체 업무 보기")
+    ls.add_argument("--all", action="store_true", help="제외한 문서의 업무도 함께 보기")
+    ls.add_argument("--doc", default=None, help="특정 문서의 업무만 보기")
+    ls.add_argument("-v", "--verbose", action="store_true", help="할 일·담당·근거 문장까지 보기")
+
+    dc = sub.add_parser("docs", help="등록된 문서와 제외 여부 보기")
+    dc.add_argument("--docs", type=Path, default=Path("docs"), help="문서 폴더 (기본: docs)")
+    for name, help_text in (("exclude", "문서를 일정에서 빼기 (분석 결과는 보관)"), ("include", "제외한 문서를 일정에 다시 넣기")):
+        ex_ = sub.add_parser(name, help=help_text)
+        ex_.add_argument("name", help="문서 파일 이름")
+        ex_.add_argument("--docs", type=Path, default=Path("docs"), help="문서 폴더 (기본: docs)")
 
     d = sub.add_parser("done", help="업무 완료 처리")
     d.add_argument("task_id")
@@ -200,6 +257,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ingest(args, store)
     if args.command == "list":
         return cmd_list(args, store)
+    if args.command == "docs":
+        return cmd_docs(args, store)
+    if args.command in ("exclude", "include"):
+        return cmd_exclude(args, store)
     if args.command == "done":
         return cmd_done(args, store)
     if args.command == "serve":

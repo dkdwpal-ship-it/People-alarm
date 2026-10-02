@@ -165,3 +165,44 @@ def test_documents_reports_llm(server):
     assert body["llm"]["model"] == "thinkingcap"
     from people_alarm import __version__
     assert body["version"] == __version__
+
+
+def test_exclude_include_and_delete_documents(server):
+    base, seeded, data_dir = server
+    _upload(base + "/api/upload", "세무.md", "매월 10일 원천세".encode())
+    _wait_docs(base)
+
+    # 제외: 일정에서 빠지지만 분석 결과는 보관
+    res = json.load(_post(base + "/api/documents/exclude", {"name": "세무.md", "excluded": True}))
+    assert res == {"name": "세무.md", "excluded": True}
+    payload = json.load(urllib.request.urlopen(base + "/api/dashboard"))
+    assert all(t["source"] != "세무.md" for t in payload["tasks"])
+    assert [t["title"] for t in payload["excludedTasks"]] == ["세무 업무"]
+    assert payload["excludedDocuments"] == ["세무.md"]
+    assert all(o["taskId"] != payload["excludedTasks"][0]["id"] for o in payload["occurrences"])
+    doc = _wait_docs(base)["세무.md"]
+    assert doc["excluded"] and doc["taskCount"] == 1
+
+    # 다시 분석해도 제외 상태 유지
+    _post(base + "/api/analyze", {"name": "세무.md"})
+    assert _wait_docs(base)["세무.md"]["excluded"]
+
+    # 다시 포함
+    _post(base + "/api/documents/exclude", {"name": "세무.md", "excluded": False})
+    payload = json.load(urllib.request.urlopen(base + "/api/dashboard"))
+    assert "세무 업무" in [t["title"] for t in payload["tasks"]] and payload["excludedTasks"] == []
+
+    # 삭제: 파일과 업무 모두 제거, 다른 문서 업무는 유지
+    res = json.load(_post(base + "/api/documents/delete", {"name": "세무.md"}))
+    assert res["removedTasks"] == 1
+    assert not (data_dir / "docs" / "세무.md").exists()
+    titles = [t["title"] for t in json.load(urllib.request.urlopen(base + "/api/dashboard"))["tasks"]]
+    assert titles == [seeded.title]
+    assert "세무.md" not in _wait_docs(base)
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(base + "/api/documents/delete", {"name": "없는문서.md"})
+    assert e.value.code == 404
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(base + "/api/documents/exclude", {"name": "../tasks.json"})
+    assert e.value.code == 404

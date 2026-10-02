@@ -105,6 +105,10 @@ def make_handler(
                 return self._post_upload()
             if path == "/api/analyze":
                 return self._post_analyze()
+            if path == "/api/documents/exclude":
+                return self._post_exclude()
+            if path == "/api/documents/delete":
+                return self._post_delete()
             self._error(HTTPStatus.NOT_FOUND, "not found")
 
         def _post_done(self):
@@ -150,6 +154,40 @@ def make_handler(
             except FileNotFoundError:
                 return self._error(HTTPStatus.NOT_FOUND, f"문서를 찾을 수 없습니다: {name}")
             self._json(HTTPStatus.ACCEPTED, {"name": name})
+
+        def _doc_name(self) -> str | None:
+            body = self._read_json()
+            if body is None:
+                return None
+            name = Path(str(body.get("name", ""))).name
+            self._body = body
+            if not name:
+                self._error(HTTPStatus.BAD_REQUEST, "name이 필요합니다.")
+                return None
+            return name
+
+        def _post_exclude(self):
+            name = self._doc_name()
+            if name is None:
+                return
+            excluded = bool(self._body.get("excluded", True))
+            try:
+                analyzer.set_excluded(name, excluded)
+            except FileNotFoundError:
+                return self._error(HTTPStatus.NOT_FOUND, f"문서를 찾을 수 없습니다: {name}")
+            self._json(HTTPStatus.OK, {"name": name, "excluded": excluded})
+
+        def _post_delete(self):
+            name = self._doc_name()
+            if name is None:
+                return
+            try:
+                removed = analyzer.delete(name)
+            except FileNotFoundError:
+                return self._error(HTTPStatus.NOT_FOUND, f"문서를 찾을 수 없습니다: {name}")
+            except RuntimeError as e:
+                return self._error(HTTPStatus.CONFLICT, str(e))
+            self._json(HTTPStatus.OK, {"name": name, "removedTasks": removed})
 
         def log_message(self, fmt, *args):  # 요청 로그는 조용히
             pass

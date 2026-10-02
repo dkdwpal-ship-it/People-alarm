@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "people-alarm"
-version = "0.3.0"
+version = "0.4.0"
 description = "업무 문서를 읽어 시기별 업무 리스트를 알려주는 agent (사내 LLM 사용)"
 requires-python = ">=3.10"
 dependencies = [

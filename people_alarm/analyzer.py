@@ -101,8 +101,9 @@ class Analyzer:
             store = Store(self.data_dir)
             jobs = {k: asdict(v) for k, v in self._jobs.items()}
         counts: dict[str, int] = {}
-        for t in store.tasks:
+        for t in store.all_tasks:
             counts[t.source] = counts.get(t.source, 0) + 1
+        excluded = store.excluded_documents
         out = []
         for path in find_documents(self.docs_dir) if self.docs_dir.exists() else []:
             stat = path.stat()
@@ -112,9 +113,37 @@ class Analyzer:
                 "modified": dt.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="minutes"),
                 "analyzed": store.is_unchanged(path),
                 "taskCount": counts.get(path.name, 0),
+                "excluded": path.name in excluded,
                 "job": jobs.get(path.name),
             })
         return sorted(out, key=lambda d: d["modified"], reverse=True)
+
+    def _known(self, name: str) -> bool:
+        return (self.docs_dir / name).is_file() or name in Store(self.data_dir)._data["documents"]
+
+    def set_excluded(self, name: str, excluded: bool) -> None:
+        """문서를 일정에서 빼거나 다시 넣는다 (파일과 분석 결과는 그대로)."""
+        with self.lock:
+            if not self._known(name):
+                raise FileNotFoundError(name)
+            store = Store(self.data_dir)
+            store.set_excluded(name, excluded)
+            store.save()
+
+    def delete(self, name: str) -> int:
+        """문서 파일과 분석 결과를 지운다. 지운 업무 수를 반환."""
+        with self.lock:
+            if not self._known(name):
+                raise FileNotFoundError(name)
+            job = self._jobs.get(name)
+            if job and job.status in ("queued", "running"):
+                raise RuntimeError("분석 중인 문서는 삭제할 수 없습니다. 분석이 끝난 뒤 다시 시도하세요.")
+            (self.docs_dir / name).unlink(missing_ok=True)
+            store = Store(self.data_dir)
+            removed = store.forget_document(name)
+            store.save()
+            self._jobs.pop(name, None)
+            return removed
 
     # --- 작업자 ---
     def _set(self, name: str, **fields) -> None:

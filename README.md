@@ -34,13 +34,19 @@ people-alarm export-html            # reports/dashboard.html 파일 하나로 �
 - **업무 리스트**: 지난 마감(미완료) · 기간 내 마감 · 지금 준비할 업무. 체크박스로 완료 처리하면 `data/done.json`에 저장됩니다.
 - **달력**: 한국 탁상달력처럼 일요일·공휴일은 빨강, 토요일은 파랑. 날짜를 누르면 그날 업무가 보입니다.
 - **월별 마감 업무 수**: 앞으로 12개월 중 바쁜 달을 한눈에. 막대를 누르면 달력이 그 달로 이동합니다.
-- **전체 업무**: 반복 규칙, 준비 기간, 다음 마감일, 출처 문서를 검색할 수 있는 표.
 - 분류 칩으로 급여·세무 등 원하는 분류만 볼 수 있고, 기준일을 바꿔 과거·미래 시점도 볼 수 있습니다.
 
 - **업무 문서** (`serve`에서만): 문서를 끌어다 놓거나 **문서 올리기** 버튼으로 올리면 `docs/`에 저장되고
   바로 분석이 시작됩니다. 한 건씩 차례로 분석하며, 끝나면 업무 리스트·달력이 새로고침 없이 갱신됩니다.
   문서마다 분석 상태(대기 중 / 분석 중 / 업무 n건 / 분석 실패)와 **다시 분석** 버튼이 있습니다.
   같은 이름으로 다시 올리면 그 문서의 업무가 새 분석 결과로 바뀝니다.
+  - **제외**: 문서를 일정(리스트·달력·리포트)에서 뺍니다. 파일과 분석 결과는 남아 있어 **일정에 다시 넣기**로 되돌릴 수 있습니다.
+    다시 분석해도 제외 상태는 유지됩니다.
+  - **삭제**: 문서 파일과 그 문서의 업무를 모두 지웁니다. 한 번 더 눌러 확인해야 삭제됩니다.
+  - **결과 보기**: 그 문서에서 분석된 업무만 아래 '분석 결과 전체'에 펼쳐 보여줍니다.
+- **분석 결과 전체** (필요할 때 펼쳐 보기): 분석된 모든 업무를 반복 규칙, 준비 기간, 다음 마감, 담당, 근거 문장,
+  출처 문서와 함께 보여주는 표입니다. 문서별로 고르거나 검색할 수 있고, **제외한 문서의 업무도 보기**를 켜면
+  제외한 문서의 분석 결과도 함께 나옵니다. 펼침 상태는 브라우저에 기억됩니다.
 
 `serve`는 기본적으로 이 PC(127.0.0.1)에서만 접속됩니다. `export-html`로 만든 파일은 서버 없이 열리며,
 완료 표시는 그 브라우저에만 저장됩니다.
@@ -96,7 +102,12 @@ people-alarm month --save           # reports/2026-09-30-month.md 로 저장
 people-alarm next-month --date 2026-12-01   # 기준일 지정
 
 # 3) 관리
-people-alarm list                   # 추출된 전체 업무와 다음 마감일
+people-alarm list                   # 일정에 쓰는 업무와 다음 마감일
+people-alarm list --all -v          # 제외한 문서까지 분석 결과 전체 (할 일·담당·근거 포함)
+people-alarm list --doc 급여규정.docx  # 특정 문서의 분석 결과만
+people-alarm docs                   # 등록된 문서와 제외 여부
+people-alarm exclude 급여규정.docx   # 문서를 일정에서 빼기 (분석 결과는 보관)
+people-alarm include 급여규정.docx   # 다시 넣기
 people-alarm done 5a016e1dac        # 업무 완료 처리 (id는 리스트에 표시됨)
 ```
 
@@ -143,7 +154,7 @@ python -m people_alarm --data examples/data --date 2026-09-30 week
 git pull
 pip uninstall -y people-alarm
 pip install -e .            # -e를 꼭 붙이세요 (붙이지 않으면 코드가 복사되어 git pull이 반영되지 않음)
-people-alarm --version      # people-alarm 0.3.0 (코드 위치: …/People-alarm/people_alarm) 이 나오면 정상
+people-alarm --version      # people-alarm 0.4.0 (코드 위치: …/People-alarm/people_alarm) 이 나오면 정상
 people-alarm serve
 ```
 

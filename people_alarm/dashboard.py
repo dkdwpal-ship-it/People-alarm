@@ -28,29 +28,34 @@ def data_window(today: dt.date) -> tuple[dt.date, dt.date]:
     return start, dt.date(last.year, last.month, calendar.monthrange(last.year, last.month)[1])
 
 
+def _task_json(t) -> dict:
+    return {
+        "id": t.id,
+        "title": t.title,
+        "description": t.description,
+        "category": t.category,
+        "owner": t.owner,
+        "leadDays": t.lead_days,
+        "source": t.source,
+        "evidence": t.evidence,
+        "rule": describe(t.schedule),
+    }
+
+
 def build_payload(store: Store, today: dt.date, mode: Mode = "server", label: str = "") -> dict:
     start, end = data_window(today)
     tasks = store.tasks
+    excluded = store.excluded_documents
     return {
         "mode": mode,
         "label": label,
         "today": today.isoformat(),
         "window": {"start": start.isoformat(), "end": end.isoformat()},
         "overdueLookbackDays": OVERDUE_LOOKBACK_DAYS,
-        "tasks": [
-            {
-                "id": t.id,
-                "title": t.title,
-                "description": t.description,
-                "category": t.category,
-                "owner": t.owner,
-                "leadDays": t.lead_days,
-                "source": t.source,
-                "evidence": t.evidence,
-                "rule": describe(t.schedule),
-            }
-            for t in tasks
-        ],
+        "tasks": [_task_json(t) for t in tasks],
+        # 제외한 문서의 분석 결과 (일정에는 쓰지 않고 '분석 결과 전체 보기'에서만 보여줌)
+        "excludedTasks": [_task_json(t) for t in store.all_tasks if t.source in excluded],
+        "excludedDocuments": sorted(excluded),
         "occurrences": sorted(
             ({"taskId": t.id, "due": d.isoformat()} for t in tasks for d in occurrences(t.schedule, start, end)),
             key=lambda o: (o["due"], o["taskId"]),
